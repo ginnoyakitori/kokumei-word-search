@@ -14,6 +14,9 @@ const WORD_FILES = {
   pokemon: ["pokemon.txt"]
 };
 
+const SMALL_BOARD_MAX_SIZE = 10;
+const SMALL_BOARD_CANDIDATE_LIMIT = 120;
+
 const DIRECTIONS = [
   [1, 0],
   [-1, 0],
@@ -256,6 +259,38 @@ function getWordOverlapPotential(word) {
   return Object.values(counts).reduce((sum, count) => sum + count * count, 0);
 }
 
+function getLetterCounts(text) {
+  const counts = {};
+
+  for (const letter of text) {
+    counts[letter] = (counts[letter] || 0) + 1;
+  }
+
+  return counts;
+}
+
+function getBoardLetterCounts(grid) {
+  const counts = {};
+
+  for (const row of grid) {
+    for (const letter of row) {
+      if (letter) {
+        counts[letter] = (counts[letter] || 0) + 1;
+      }
+    }
+  }
+
+  return counts;
+}
+
+function getWordBoardAffinity(word, boardLetterCounts) {
+  const wordLetterCounts = getLetterCounts(word);
+
+  return Object.entries(wordLetterCounts).reduce((sum, [letter, count]) => {
+    return sum + Math.min(count, boardLetterCounts[letter] || 0);
+  }, 0);
+}
+
 function createCandidatePool(words) {
   const shuffled = shuffle(words);
 
@@ -273,6 +308,78 @@ function createCandidatePool(words) {
 
     return Math.random() - 0.5;
   });
+}
+
+function createSmallBoardCandidates(remainingWords, grid) {
+  const boardLetterCounts = getBoardLetterCounts(grid);
+  const hasPlacedLetters = Object.keys(boardLetterCounts).length > 0;
+  const shuffled = shuffle(remainingWords);
+
+  return shuffled
+    .map(word => ({
+      word,
+      affinity: getWordBoardAffinity(word, boardLetterCounts),
+      potential: getWordOverlapPotential(word)
+    }))
+    .sort((a, b) => {
+      if (hasPlacedLetters && a.affinity !== b.affinity) {
+        return b.affinity - a.affinity;
+      }
+
+      if (a.potential !== b.potential) {
+        return b.potential - a.potential;
+      }
+
+      if (a.word.length !== b.word.length) {
+        return a.word.length - b.word.length;
+      }
+
+      return Math.random() - 0.5;
+    })
+    .slice(0, SMALL_BOARD_CANDIDATE_LIMIT);
+}
+
+function smallBoardPlacementScore(placement, word, candidate) {
+  const hasOverlap = placement.overlapCount > 0;
+
+  return (
+    placement.pairOverlapGain * 5000 +
+    placement.overlapCellGain * 3000 +
+    placement.heavyOverlapScore * 650 +
+    placement.overlapCount * 1200 +
+    candidate.affinity * 180 -
+    placement.newCellCount * 120 +
+    candidate.potential * 25 +
+    word.length * 4 -
+    (hasOverlap ? 0 : 900)
+  );
+}
+
+function chooseBestSmallBoardStep(grid, usageGrid, remainingWords) {
+  const candidates = createSmallBoardCandidates(remainingWords, grid);
+  let best = null;
+
+  for (const candidate of candidates) {
+    const placements = getAllPlacements(grid, usageGrid, candidate.word);
+
+    for (const placement of placements) {
+      const score = smallBoardPlacementScore(
+        placement,
+        candidate.word,
+        candidate
+      );
+
+      if (!best || score > best.score) {
+        best = {
+          word: candidate.word,
+          placement,
+          score
+        };
+      }
+    }
+  }
+
+  return best;
 }
 
 function calculateUsageStats(usageGrid) {
@@ -368,6 +475,11 @@ function isBetterResult(candidate, best) {
 function runSingleAttempt(words, size) {
   const grid = createGrid(size);
   const usageGrid = createUsageGrid(size);
+
+  if (size <= SMALL_BOARD_MAX_SIZE) {
+    return runSmallBoardAttempt(words, size, grid, usageGrid);
+  }
+
   const orderedWords = createCandidatePool(words).filter(
     word => word.length <= size
   );
@@ -396,14 +508,46 @@ function runSingleAttempt(words, size) {
   };
 }
 
+function runSmallBoardAttempt(words, size, grid, usageGrid) {
+  const remainingWords = createCandidatePool(words).filter(
+    word => word.length <= size
+  );
+  const placedWords = [];
+
+  while (remainingWords.length > 0) {
+    const best = chooseBestSmallBoardStep(grid, usageGrid, remainingWords);
+
+    if (!best) {
+      break;
+    }
+
+    placeWordAt(grid, usageGrid, best.word, best.placement);
+    placedWords.push(best.word);
+
+    const placedIndex = remainingWords.indexOf(best.word);
+    if (placedIndex !== -1) {
+      remainingWords.splice(placedIndex, 1);
+    }
+  }
+
+  fillGrid(grid);
+
+  return {
+    grid,
+    usageGrid,
+    placedWords
+  };
+}
+
 function generateWordSearch(words, size) {
   /*
     重複が多い盤面を探すため、試行回数を増やす。
     サイズが大きいと重くなるので調整。
   */
 
-  let attempts = 60;
+  let attempts = size <= SMALL_BOARD_MAX_SIZE ? 120 : 60;
 
+  if (size <= 8) attempts = 160;
   if (size >= 18) attempts = 40;
   if (size >= 22) attempts = 25;
   if (size >= 26) attempts = 15;
