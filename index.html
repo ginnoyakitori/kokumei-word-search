@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>シークワーズ生成</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 24px;
+      background: #f7f7f9;
+      color: #222;
+    }
+
+    h1 {
+      margin-bottom: 16px;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 20px;
+      padding: 16px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    label {
+      font-weight: bold;
+    }
+
+    select, input, button {
+      padding: 8px 12px;
+      font-size: 16px;
+    }
+
+    button {
+      border: none;
+      border-radius: 8px;
+      background: #2563eb;
+      color: white;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    #status {
+      margin: 12px 0;
+      font-weight: bold;
+    }
+
+    .result-section {
+      margin-top: 20px;
+      display: grid;
+      gap: 20px;
+    }
+
+    .card {
+      background: white;
+      padding: 16px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    #grid {
+      display: inline-grid;
+      gap: 2px;
+      margin-top: 12px;
+    }
+
+    .cell {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #eef2ff;
+      border: 1px solid #c7d2fe;
+      font-weight: bold;
+      border-radius: 4px;
+      user-select: none;
+    }
+
+    .word-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .word-chip {
+      padding: 6px 10px;
+      background: #e5e7eb;
+      border-radius: 999px;
+      font-size: 14px;
+    }
+
+    .not-placed {
+      background: #fee2e2;
+    }
+
+    .meta {
+      font-size: 14px;
+      color: #555;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <h1>シークワーズ生成アプリ</h1>
+
+  <div class="controls">
+    <div>
+      <label for="wordType">単語リスト</label><br />
+      <select id="wordType">
+        <option value="countries">国名</option>
+        <option value="capitals">首都名</option>
+        <option value="pokemon">ポケモン</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="gridSize">盤面サイズ</label><br />
+      <input id="gridSize" type="number" min="5" max="30" value="15" />
+    </div>
+
+    <div style="align-self: end;">
+      <button id="generateBtn">生成する</button>
+    </div>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="result-section">
+    <div class="card">
+      <h2>盤面</h2>
+      <div class="meta">文字列は縦・横・斜めの8方向に入ります。</div>
+      <div id="grid"></div>
+    </div>
+
+    <div class="card">
+      <h2>使われた単語</h2>
+      <div id="placedWords" class="word-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>入らなかった単語</h2>
+      <div id="notPlacedWords" class="word-list"></div>
+    </div>
+  </div>
+
+ <script src="./script.js"></script>
+</body>
+</html>
