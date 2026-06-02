@@ -9,8 +9,8 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname)));
 
 const WORD_FILES = {
-  countries: ["kokumei.txt", "countries.txt"],
-  capitals: ["shutomei.txt", "capitals.txt"],
+  countries: [ "countries.txt"],
+  capitals: [ "capitals.txt"],
   pokemon: ["pokemon.txt"]
 };
 
@@ -128,7 +128,15 @@ function getWordOverlapPotential(word) {
 function getBoardLetterCounts(grid) {
   const counts = {};
 
+  if (!Array.isArray(grid)) {
+    return counts;
+  }
+
   for (const row of grid) {
+    if (!Array.isArray(row)) {
+      continue;
+    }
+
     for (const letter of row) {
       if (letter) {
         counts[letter] = (counts[letter] || 0) + 1;
@@ -142,10 +150,29 @@ function getBoardLetterCounts(grid) {
 function getUsageLetterCounts(grid, usageGrid) {
   const counts = {};
 
-  for (let y = 0; y < grid.length; y++) {
-    for (let x = 0; x < grid.length; x++) {
-      const letter = grid[y][x];
-      const usage = usageGrid[y][x];
+  // 念のため、配列でない場合は空の集計を返す
+  if (!Array.isArray(grid) || !Array.isArray(usageGrid)) {
+    return counts;
+  }
+
+  // grid と usageGrid の行数がずれていても落ちないようにする
+  const height = Math.min(grid.length, usageGrid.length);
+
+  for (let y = 0; y < height; y++) {
+    const gridRow = grid[y];
+    const usageRow = usageGrid[y];
+
+    // 行が壊れている場合はスキップ
+    if (!Array.isArray(gridRow) || !Array.isArray(usageRow)) {
+      continue;
+    }
+
+    // 列数がずれていても落ちないようにする
+    const width = Math.min(gridRow.length, usageRow.length);
+
+    for (let x = 0; x < width; x++) {
+      const letter = gridRow[x];
+      const usage = usageRow[x];
 
       if (letter && usage > 0) {
         counts[letter] = (counts[letter] || 0) + usage;
@@ -460,7 +487,21 @@ function calculateUsageStats(usageGrid) {
   let overlapScore = 0;
   let maxUsage = 0;
 
+  if (!Array.isArray(usageGrid)) {
+    return {
+      usedCellCount,
+      totalUsageCount,
+      overlapCellCount,
+      overlapScore,
+      maxUsage
+    };
+  }
+
   for (const row of usageGrid) {
+    if (!Array.isArray(row)) {
+      continue;
+    }
+
     for (const count of row) {
       if (count > 0) {
         usedCellCount++;
@@ -469,9 +510,6 @@ function calculateUsageStats(usageGrid) {
 
       if (count >= 2) {
         overlapCellCount++;
-
-        // 2語なら1点、3語なら3点、4語なら6点。
-        // 1マスに多く重なるほど高評価。
         overlapScore += (count * (count - 1)) / 2;
       }
 
