@@ -4,7 +4,11 @@ const gridSizeEl = document.getElementById("gridSize");
 const statusEl = document.getElementById("status");
 const gridEl = document.getElementById("grid");
 const placedWordsEl = document.getElementById("placedWords");
-const notPlacedWordsEl = document.getElementById("notPlacedWords");
+
+const placedWordCountEl = document.getElementById("placedWordCount");
+const totalPlacedCharsEl = document.getElementById("totalPlacedChars");
+const boardSizeValueEl = document.getElementById("boardSizeValue");
+const usageGridEl = document.getElementById("usageGrid");
 
 generateBtn.addEventListener("click", generatePuzzle);
 
@@ -20,7 +24,11 @@ async function generatePuzzle() {
   statusEl.textContent = "生成中...";
   gridEl.innerHTML = "";
   placedWordsEl.innerHTML = "";
-  notPlacedWordsEl.innerHTML = "";
+  usageGridEl.innerHTML = "";
+
+  placedWordCountEl.textContent = "0";
+  totalPlacedCharsEl.textContent = "0";
+  boardSizeValueEl.textContent = `${size}×${size}`;
 
   try {
     const response = await fetch("/api/generate", {
@@ -38,11 +46,15 @@ async function generatePuzzle() {
     }
 
     renderGrid(data.grid);
-    renderWords(placedWordsEl, data.placedWords, false);
-    renderWords(notPlacedWordsEl, data.notPlacedWords, true);
+    renderUsageGrid(data.usageGrid);
+    renderWords(placedWordsEl, data.placedWords);
+
+    placedWordCountEl.textContent = data.placedWordCount;
+    totalPlacedCharsEl.textContent = data.totalPlacedChars;
+    boardSizeValueEl.textContent = `${data.size}×${data.size}`;
 
     statusEl.textContent =
-      `生成完了：${data.placedWords.length}語配置 / ${data.totalWords}語中`;
+      `生成完了：${data.placedWordCount}語 / 合計 ${data.totalPlacedChars}文字`;
   } catch (error) {
     console.error(error);
     statusEl.textContent = `エラー: ${error.message}`;
@@ -64,18 +76,49 @@ function renderGrid(grid) {
   });
 }
 
-function renderWords(container, words, isNotPlaced) {
+function renderUsageGrid(usageGrid) {
+  usageGridEl.innerHTML = "";
+
+  if (!usageGrid || usageGrid.length === 0) {
+    usageGridEl.textContent = "使用状況データがありません。";
+    return;
+  }
+
+  const size = usageGrid.length;
+  usageGridEl.style.gridTemplateColumns = `repeat(${size}, 32px)`;
+
+  usageGrid.forEach(row => {
+    row.forEach(count => {
+      const div = document.createElement("div");
+      div.className = "usage-cell";
+
+      if (count === 0) {
+        div.classList.add("usage-zero");
+      }
+
+      if (count >= 2) {
+        div.classList.add("usage-multi");
+      }
+
+      div.textContent = count;
+      usageGridEl.appendChild(div);
+    });
+  });
+}
+
+function renderWords(container, words) {
   container.innerHTML = "";
 
   if (!words || words.length === 0) {
-    container.textContent = isNotPlaced ? "なし" : "0語";
+    container.textContent = "使われた単語はありません。";
     return;
   }
 
   words.forEach(word => {
     const span = document.createElement("span");
-    span.className = isNotPlaced ? "word-chip not-placed" : "word-chip";
+    span.className = "word-chip";
     span.textContent = word;
     container.appendChild(span);
   });
 }
+``

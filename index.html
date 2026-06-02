@@ -20,7 +20,7 @@
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
-      align-items: center;
+      align-items: end;
       margin-bottom: 20px;
       padding: 16px;
       background: white;
@@ -67,6 +67,32 @@
       box-shadow: 0 2px 8px rgba(0,0,0,0.08);
     }
 
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .stat-box {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 10px;
+      padding: 14px;
+    }
+
+    .stat-label {
+      font-size: 14px;
+      color: #4b5563;
+      margin-bottom: 6px;
+    }
+
+    .stat-value {
+      font-size: 28px;
+      font-weight: bold;
+      color: #1d4ed8;
+    }
+
     #grid {
       display: inline-grid;
       gap: 2px;
@@ -100,19 +126,35 @@
       font-size: 14px;
     }
 
-    .not-placed {
-      background: #fee2e2;
-    }
-
     .meta {
       font-size: 14px;
       color: #555;
       margin-top: 8px;
     }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+
+    th, td {
+      border: 1px solid #d1d5db;
+      padding: 8px 10px;
+      text-align: center;
+    }
+
+    th {
+      background: #f3f4f6;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
   </style>
 </head>
 <body>
-  <h1>シークワーズ生成アプリ</h1>
+  <h1>シークワーズ生成</h1>
 
   <div class="controls">
     <div>
@@ -129,7 +171,7 @@
       <input id="gridSize" type="number" min="5" max="30" value="15" />
     </div>
 
-    <div style="align-self: end;">
+    <div>
       <button id="generateBtn">生成する</button>
     </div>
   </div>
@@ -137,6 +179,24 @@
   <div id="status"></div>
 
   <div class="result-section">
+    <div class="card">
+      <h2>統計</h2>
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-label">使われた単語数</div>
+          <div id="placedWordCount" class="stat-value">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">使われた単語の合計文字数</div>
+          <div id="totalPlacedChars" class="stat-value">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">盤面サイズ</div>
+          <div id="boardSizeValue" class="stat-value">0×0</div>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <h2>盤面</h2>
       <div class="meta">文字列は縦・横・斜めの8方向に入ります。</div>
@@ -149,11 +209,16 @@
     </div>
 
     <div class="card">
-      <h2>入らなかった単語</h2>
-      <div id="notPlacedWords" class="word-list"></div>
-    </div>
+  <h2>各座標の文字が何個の単語に使われているか</h2>
+  <div class="meta">
+    各マスの数字は、その座標の文字がいくつの単語に使われているかを表します。
+    ランダムで埋められた文字は 0 です。
+  </div>
+  <div id="usageGrid"></div>
+</div>
   </div>
 
- <script src="./script.js"></script>
+  <script src="./script.js"></script>
 </body>
 </html>
+``
