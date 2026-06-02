@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>国名しりとり検索 Pro</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>国名しりとり検索</h1>
+    </header>
+
+    <section class="common-settings">
+        <div class="form-group">
+            <label for="listName">使用する単語リスト:</label>
+            <select id="listName">
+                <option value="kokumei.txt">国名</option>
+                <option value="shutomei.txt">首都名</option>
+                <option value="kokumei_shutomei.txt">国名と首都名</option>
+                <option value="pokemon.txt">ポケモン</option>
+                <option value="countries-only.txt">共役削除国名</option>
+                <option value="capitals-only.txt">共役削除首都名</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="modeSelect">検索モード:</label>
+            <select id="modeSelect">
+                <option value="shiritori">文字指定しりとり</option>
+                <option value="wildcardShiritori">？文字指定しりとり（経路）</option>
+                <option value="wordCountShiritori">単語数指定しりとり</option>
+                <option value="loop">ループ検索</option>
+                <option value="chain">チェーン検索</option>
+                <option value="autoGenerate">自動生成モード</option>
+                <hr>
+                <option value="wildcard">単語検索（？使用）</option>
+                <option value="substring">単語検索（部分一致）</option>
+            </select>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="resultPage">ページ</label>
+                <input type="number" id="resultPage" value="1" min="1">
+            </div>
+            <div class="form-group">
+                <label for="resultsPerPage">表示件数</label>
+                <input type="number" id="resultsPerPage" value="100" min="1" max="500">
+            </div>
+            <div class="form-group" style="align-self:flex-end;">
+                <button type="button" id="prevPageBtn" class="secondary">前へ</button>
+                <button type="button" id="nextPageBtn" class="secondary">次へ</button>
+            </div>
+        </div>
+    </section>
+
+    <section class="chat-settings" aria-labelledby="chatSettingsTitle">
+        <h2 id="chatSettingsTitle">条件チャット</h2>
+        <div id="chatMessages" class="chat-messages" aria-live="polite">
+            <div class="chat-message assistant">条件を入力すると、現在の検索モードに反映します。</div>
+        </div>
+        <div class="chat-input-row">
+            <input type="text" id="conditionChatInput" placeholder="開始ア、終了ン、3語、スを含める、ワを除外">
+            <button type="button" id="conditionChatApply">反映</button>
+        </div>
+    </section>
+
+    <section class="advanced-settings" aria-labelledby="advancedConditionsTitle">
+        <h2 id="advancedConditionsTitle">高度条件</h2>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="dakutenCountMode">濁音数</label>
+                <select id="dakutenCountMode">
+                    <option value="">指定なし</option>
+                    <option value="exact">ちょうど</option>
+                    <option value="min">以上</option>
+                    <option value="max">以下</option>
+                </select>
+                <input type="number" id="dakutenCountValue" min="0" placeholder="個" style="margin-top:5px;">
+            </div>
+            <div class="form-group">
+                <label for="handakutenCountMode">半濁音数</label>
+                <select id="handakutenCountMode">
+                    <option value="">指定なし</option>
+                    <option value="exact">ちょうど</option>
+                    <option value="min">以上</option>
+                    <option value="max">以下</option>
+                </select>
+                <input type="number" id="handakutenCountValue" min="0" placeholder="個" style="margin-top:5px;">
+            </div>
+            <div class="form-group">
+                <label for="smallKanaCountMode">小さい文字数</label>
+                <select id="smallKanaCountMode">
+                    <option value="">指定なし</option>
+                    <option value="exact">ちょうど</option>
+                    <option value="min">以上</option>
+                    <option value="max">以下</option>
+                </select>
+                <input type="number" id="smallKanaCountValue" min="0" placeholder="個" style="margin-top:5px;">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="repeatedCharWordCountMode">重複文字あり単語数</label>
+                <select id="repeatedCharWordCountMode">
+                    <option value="">指定なし</option>
+                    <option value="exact">ちょうど</option>
+                    <option value="min">以上</option>
+                    <option value="max">以下</option>
+                </select>
+                <input type="number" id="repeatedCharWordCountValue" min="0" placeholder="個" style="margin-top:5px;">
+            </div>
+            <div class="form-group">
+                <label for="hasPrecedingWord">前に続けられる単語</label>
+                <select id="hasPrecedingWord">
+                    <option value="">指定なし</option>
+                    <option value="true">あり</option>
+                    <option value="false">なし</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="hasSucceedingWord">後に続けられる単語</label>
+                <select id="hasSucceedingWord">
+                    <option value="">指定なし</option>
+                    <option value="true">あり</option>
+                    <option value="false">なし</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="lengthPattern">文字数列パターン</label>
+                <select id="lengthPattern">
+                    <option value="">指定なし</option>
+                    <option value="increasing">単調増加</option>
+                    <option value="nondecreasing">広義増加</option>
+                    <option value="decreasing">単調減少</option>
+                    <option value="nonincreasing">広義減少</option>
+                    <option value="arithmetic">等差数列</option>
+                    <option value="geometric">等比数列</option>
+                </select>
+            </div>
+            <div class="form-group" style="align-self:flex-end;">
+                <button type="button" id="clearAdvancedConditionsBtn" class="secondary">高度条件をリセット</button>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <main>
+        <div id="shiritoriMode" class="mode-section active">
+            <h2>文字指定しりとり検索</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>開始文字</label>
+                    <input type="text" id="firstChar" placeholder="例: ア">
+                </div>
+                <div class="form-group">
+                    <label>終了文字</label>
+                    <input type="text" id="lastChar" placeholder="例: ン">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>必須・除外文字</label>
+                <input type="text" id="includeChars" placeholder="含める文字（例: ス,パ）">
+                <input type="text" id="excludeChars" placeholder="除外する文字（例: ワ）" style="margin-top:5px;">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="requiredCharExactly">
+                    <label for="requiredCharExactly">必須文字をちょうど指定回数使う</label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>単語数設定</label>
+                <select id="wordCountType">
+                    <option value="none">指定しない</option>
+                    <option value="shortest">最短経路を検索</option>
+                    <option value="fixed" selected>単語数を指定する</option>
+                </select>
+                <div id="wordCountInputContainer" style="margin-top:5px;">
+                    <input type="number" id="wordCount" value="3" min="1">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>合計文字数</label>
+                <input type="number" id="shiritoriTotalLength" placeholder="例: 15" min="1">
+            </div>
+            <div class="form-group">
+                <label>出力オプション</label>
+                <div class="radio-group">
+                    <input type="radio" id="outputPath" name="outputType" value="path" checked>
+                    <label for="outputPath">経路表示（すべて表示）</label>
+                    <input type="radio" id="outputFirstCount" name="outputType" value="firstCharCount">
+                    <label for="outputFirstCount">開始文字別集計</label>
+                    <input type="radio" id="outputLastCount" name="outputType" value="lastCharCount">
+                    <label for="outputLastCount">終了文字別集計</label>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="uniqueWordLengths">
+                    <label for="uniqueWordLengths">単語の文字数がすべて異なる経路のみ表示</label>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="uniquePairOnly">
+                    <label for="uniquePairOnly">最初と最後の文字の組み合わせが唯一の経路のみ表示</label>
+                </div>
+            </div>
+            <button class="search-btn primary">しりとり経路を検索</button>
+        </div>
+
+        <div id="wildcardShiritoriMode" class="mode-section">
+            <h2>？文字指定しりとり検索</h2>
+            <p class="description">特定のパターン（例：日本→？？？→ロ？ア）に合う経路を探します。</p>
+            <div id="wordPatternList">
+                <div class="pattern-item">
+                    <span class="label">1番目:</span>
+                    <input type="text" class="word-pattern-input" value="日本">
+                </div>
+            </div>
+            <button id="addPatternBtn" class="add-btn">+ 中間単語を追加</button>
+            <div class="form-group" style="margin-top:15px;">
+                <label>最後の単語パターン:</label>
+                <input type="text" id="lastWordPattern" class="word-pattern-input" placeholder="例: ロ？ア">
+            </div>
+            <div class="form-group">
+                <label>合計文字数</label>
+                <input type="number" id="wildcardTotalLength" placeholder="例: 15" min="1">
+            </div>
+            <button class="search-btn primary">指定パターンで検索</button>
+        </div>
+
+        <div id="wordCountShiritoriMode" class="mode-section">
+            <h2>単語数指定しりとり</h2>
+            <div id="wordCountInputs">
+                <div class="word-count-input-group">
+                    <input type="text" class="word-count-input" value="2,3" placeholder="例: 3">
+                    <button class="remove-word-count-input">-</button>
+                </div>
+            </div>
+            <button id="addWordCountInput" class="add-btn">+ 単語を追加</button>
+            <div class="checkbox-group" style="margin-top:10px;">
+                <input type="checkbox" id="allowWordCountPermutation">
+                <label for="allowWordCountPermutation">並び替えを許可（例: 2,3 でも 3,2 でもOK）</label>
+            </div>
+            <div class="checkbox-group" style="margin-top:10px;">
+                <input type="checkbox" id="uniqueWordLengthsWordCount">
+                <label for="uniqueWordLengthsWordCount">単語の文字数がすべて異なる経路のみ表示</label>
+            </div>
+            <div class="form-group">
+                <label>合計文字数</label>
+                <input type="number" id="wordCountTotalLength" placeholder="例: 15" min="1">
+            </div>
+            <button class="search-btn primary">検索実行</button>
+        </div>
+
+        <div id="loopMode" class="mode-section">
+            <h2>ループ検索</h2>
+            <p class="description">最後の文字が最初の文字に戻る輪のような経路を探します。</p>
+            <input type="text" id="loopPattern" placeholder="例: ？？？？ゴ？？ト">
+            <div class="form-group">
+                <label>合計文字数</label>
+                <input type="number" id="loopTotalLength" placeholder="例: 20" min="1">
+            </div>
+            <button class="search-btn primary">ループを見つける</button>
+        </div>
+
+        <div id="chainMode" class="mode-section">
+            <h2>チェーン検索</h2>
+            <p class="description">パターンと必須文字で条件を指定して、しりとりの経路を探します。（輪にしない）</p>
+            
+            <div class="form-group">
+                <label>パターン（?で任意の1文字）</label>
+                <input type="text" id="chainPattern" placeholder="例: ？？？？ゴ？？ト">
+            </div>
+
+            <div class="form-group">
+                <label>必須文字（含める文字）</label>
+                <input type="text" id="chainRequiredChars" placeholder="例: ス,パ（カンマ区切り）">
+            </div>
+
+            <div class="form-group">
+                <label>除外文字</label>
+                <input type="text" id="chainExcludeChars" placeholder="例: ワ（カンマ区切り）">
+            </div>
+
+            <div class="form-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="chainRequiredCharExactly">
+                    <label for="chainRequiredCharExactly">必須文字をちょうど指定回数使う</label>
+                </div>
+            </div>
+
+            <button class="search-btn primary">チェーンを見つける</button>
+        </div>
+
+        <div id="autoGenerateMode" class="mode-section">
+            <h2>自動生成モード</h2>
+            <p class="description">解の個数の範囲を指定し、条件を自動で調整してしりとりを生成します。</p>
+            
+            <div class="form-group">
+                <label>解の個数範囲</label>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <input type="number" id="autoMinSolutions" value="5" min="1" placeholder="最小">
+                    <span>～</span>
+                    <input type="number" id="autoMaxSolutions" value="20" min="1" placeholder="最大">
+                    <span>個</span>
+                </div>
+            </div>
+
+            <!-- 開始文字設定 -->
+            <div class="auto-condition-group">
+                <div class="condition-header">
+                    <h3>開始文字</h3>
+                    <select class="condition-mode-select" data-condition="firstChar">
+                        <option value="none">設定しない</option>
+                        <option value="fixed" selected>設定する</option>
+                        <option value="auto">自動で設定</option>
+                    </select>
+                </div>
+                <div class="condition-input-container">
+                    <input type="text" class="auto-condition-input" id="autoFirstChar" placeholder="例: ア">
+                </div>
+            </div>
+
+            <!-- 終了文字設定 -->
+            <div class="auto-condition-group">
+                <div class="condition-header">
+                    <h3>終了文字</h3>
+                    <select class="condition-mode-select" data-condition="lastChar">
+                        <option value="none">設定しない</option>
+                        <option value="fixed" selected>設定する</option>
+                        <option value="auto">自動で設定</option>
+                    </select>
+                </div>
+                <div class="condition-input-container">
+                    <input type="text" class="auto-condition-input" id="autoLastChar" placeholder="例: ン">
+                </div>
+            </div>
+
+            <!-- 単語数設定 -->
+            <div class="auto-condition-group">
+                <div class="condition-header">
+                    <h3>単語数</h3>
+                    <select class="condition-mode-select" data-condition="wordCount">
+                        <option value="none">設定しない</option>
+                        <option value="fixed" selected>設定する</option>
+                        <option value="auto">自動で設定</option>
+                    </select>
+                </div>
+                <div class="condition-input-container">
+                    <input type="number" class="auto-condition-input" id="autoWordCount" value="3" min="1">
+                </div>
+            </div>
+
+            <!-- 含める文字設定 -->
+            <div class="auto-condition-group">
+                <div class="condition-header">
+                    <h3>含める文字</h3>
+                    <select class="condition-mode-select" data-condition="includeChars">
+                        <option value="none" selected>設定しない</option>
+                        <option value="fixed">設定する</option>
+                        <option value="auto">自動で設定</option>
+                    </select>
+                </div>
+                <div class="condition-input-container" style="display: none;">
+                    <input type="text" class="auto-condition-input" id="autoIncludeChars" placeholder="例: ス,パ（カンマ区切り）">
+                </div>
+            </div>
+
+            <!-- 除外する文字設定 -->
+            <div class="auto-condition-group">
+                <div class="condition-header">
+                    <h3>除外する文字</h3>
+                    <select class="condition-mode-select" data-condition="excludeChars">
+                        <option value="none" selected>設定しない</option>
+                        <option value="fixed">設定する</option>
+                        <option value="auto">自動で設定</option>
+                    </select>
+                </div>
+                <div class="condition-input-container" style="display: none;">
+                    <input type="text" class="auto-condition-input" id="autoExcludeChars" placeholder="例: ワ（カンマ区切り）">
+                </div>
+            </div>
+
+            <!-- 合計文字数設定 -->
+            <div class="auto-condition-group">
+                <div class="condition-header">
+                    <h3>合計文字数</h3>
+                    <select class="condition-mode-select" data-condition="totalLength">
+                        <option value="none" selected>設定しない</option>
+                        <option value="fixed">設定する</option>
+                        <option value="auto">自動で設定</option>
+                    </select>
+                </div>
+                <div class="condition-input-container" style="display: none;">
+                    <input type="number" class="auto-condition-input" id="autoTotalLength" placeholder="例: 15" min="1">
+                </div>
+            </div>
+
+            <!-- オプション -->
+            <div class="form-group">
+                <label>検索オプション</label>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="autoUniqueWordLengths">
+                    <label for="autoUniqueWordLengths">単語の文字数がすべて異なる経路のみ検索</label>
+                </div>
+            </div>
+
+            <button class="search-btn primary">自動生成を実行</button>
+        </div>
+
+        <div id="wildcardMode" class="mode-section">
+            <h2>？文字単語検索</h2>
+            <input type="text" id="wildcardText" placeholder="例: ス？？ル">
+            <button class="search-btn primary">単語を検索</button>
+        </div>
+
+        <div id="substringMode" class="mode-section">
+            <h2>部分一致検索</h2>
+            <input type="text" id="substringText" placeholder="例: リカ">
+            <button class="search-btn primary">単語を検索</button>
+        </div>
+    </main>
+
+    <section class="results-container">
+        <h3>検索結果</h3>
+        <div id="results">
+            <p class="placeholder">ここに結果が表示されます。</p>
+        </div>
+    </section>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
