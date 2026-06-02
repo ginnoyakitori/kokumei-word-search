@@ -1,82 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewportdiv>  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
-        <div class="stat-box">
-          <div class="stat-label">最大重複数</div>
-          <div id="maxUsage" class="stat-value">0</div>
-        </div>
-
-        <div class="stat-box">
-          <div class="stat-label">単語に使われたマス数</div>
-          <div id="usedCellCount" class="stat-value">0</div>
-        </div>
-
-        <div class="stat-box">
-          <div class="stat-label">総使用数</div>
-          <div id="totalUsageCount" class="stat-value">0</div>
-        </div>
-      </div>
-
-      <div class="meta">
-        重複マス数は、2個以上の単語が同じ座標の文字を共有しているマスの数です。<br />
-        最大重複数は、1つのマスを最大で何個の単語が使っているかを表します。
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>盤面</h2>
-      <div class="meta">
-        文字列は縦・横・斜めの8方向に配置されます。
-      </div>
-
-      <div class="board-wrap">
-        <div id="grid"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>各座標の文字が何個の単語に使われているか</h2>
-      <div class="meta">
-        各マスの数字は、その座標の文字を使っている単語数です。<br />
-        0 はランダムで埋められた文字、1 は1単語のみ、2以上は複数単語が重複しているマスです。
-      </div>
-
-      <div class="legend">
-        <div class="legend-item">
-          <span class="legend-box legend-zero"></span>
-          <span>0：未使用</span>
-        </div>
-        <div class="legend-item">
-          <span class="legend-box legend-one"></span>
-          <span>1：1単語</span>
-        </div>
-        <div class="legend-item">
-          <span class="legend-box legend-multi"></span>
-          <span>2：重複</span>
-        </div>
-        <div class="legend-item">
-          <span class="legend-box legend-high"></span>
-          <span>3以上：高重複</span>
-        </div>
-      </div>
-
-      <div class="board-wrap">
-        <div id="usageGrid"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>使われた単語</h2>
-      <div id="placedWords" class="word-list"></div>
-    </div>
-  </div>
-
-  <script src="./script.js"></script>
-</body>
-</html>
+-scale=1.0" /><head>
 
   <title>シークワーズ生成アプリ</title>
 
@@ -342,7 +266,7 @@
     </div>
 
     <div>
-      <button id="generateBtn">生成する</button>
+      <button id="generateBtn" type="button">生成する</button>
     </div>
   </div>
 
@@ -376,3 +300,83 @@
         <div class="stat-box">
           <div class="stat-label">重複スコア</div>
           <div id="overlapScore" class="stat-value">0</div>
+        </div>
+
+        <div class="stat-box">
+          <div class="stat-label">最大重複数</div>
+          <div id="maxUsage" class="stat-value">0</div>
+        </div>
+
+        <div class="stat-box">
+          <div class="stat-label">単語に使われたマス数</div>
+          <div id="usedCellCount" class="stat-value">0</div>
+        </div>
+
+        <div class="stat-box">
+          <div class="stat-label">総使用数</div>
+          <div id="totalUsageCount" class="stat-value">0</div>
+        </div>
+      </div>
+
+      <div class="meta">
+        重複マス数は、2個以上の単語が同じ座標の文字を共有しているマスの数です。<br />
+        最大重複数は、1つのマスを最大で何個の単語が使っているかを表します。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>盤面</h2>
+      <div class="meta">
+        文字列は縦・横・斜めの8方向に配置されます。
+      </div>
+
+      <div class="board-wrap">
+        <div id="grid"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>各座標の文字が何個の単語に使われているか</h2>
+
+      <div class="meta">
+        各マスの数字は、その座標の文字を使っている単語数です。<br />
+        0 はランダムで埋められた文字、1 は1単語のみ、2以上は複数単語が重複しているマスです。
+      </div>
+
+      <div class="legend">
+        <div class="legend-item">
+          <span class="legend-box legend-zero"></span>
+          <span>0：未使用</span>
+        </div>
+
+        <div class="legend-item">
+          <span class="legend-box legend-one"></span>
+          <span>1：1単語</span>
+        </div>
+
+        <div class="legend-item">
+          <span class="legend-box legend-multi"></span>
+          <span>2：重複</span>
+        </div>
+
+        <div class="legend-item">
+          <span class="legend-box legend-high"></span>
+          <span>3以上：高重複</span>
+        </div>
+      </div>
+
+      <div class="board-wrap">
+        <div id="usageGrid"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>使われた単語</h2>
+      <div id="placedWords" class="word-list"></div>
+    </div>
+  </div>
+
+  <script src="./script.js"></script>
+</body>
+</html>
+  <meta charset="UTF-8" />
