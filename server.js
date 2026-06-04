@@ -9,8 +9,8 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname)));
 
 const WORD_FILES = {
-  countries: [ "countries.txt"],
-  capitals: [ "capitals.txt"],
+  countries: ["kokumei.txt", "countries.txt"],
+  capitals: ["shutomei.txt", "capitals.txt"],
   pokemon: ["pokemon.txt"]
 };
 
@@ -25,19 +25,23 @@ const DIRECTIONS = [
   [-1, 1]
 ];
 
-// 生成時間の上限。
-// 60秒ぴったりだと環境によってタイムアウトしやすいので、少し余裕を見て55秒にしています。
-const GENERATION_TIME_LIMIT_MS = 55_000;
+const CENTER_DIRECTIONS = [
+  [1, 0],
+  [0, 1],
+  [1, 1],
+  [1, -1]
+];
 
-// 1回の探索中に、残り単語から何語を候補として詳しく調べるか。
-// 大きくすると重複は増えやすいですが、重くなります。
+// Render上で1分ギリギリにすると不安定になりやすいので少し余裕を持たせています
+const GENERATION_TIME_LIMIT_MS = 50_000;
+
 function getCandidateLimit(size) {
   if (size <= 7) return 220;
   if (size <= 10) return 180;
-  if (size <= 15) return 130;
-  if (size <= 20) return 90;
-  if (size <= 25) return 70;
-  return 55;
+  if (size <= 15) return 140;
+  if (size <= 20) return 100;
+  if (size <= 25) return 75;
+  return 60;
 }
 
 function normalizeWord(word) {
@@ -150,24 +154,20 @@ function getBoardLetterCounts(grid) {
 function getUsageLetterCounts(grid, usageGrid) {
   const counts = {};
 
-  // 念のため、配列でない場合は空の集計を返す
   if (!Array.isArray(grid) || !Array.isArray(usageGrid)) {
     return counts;
   }
 
-  // grid と usageGrid の行数がずれていても落ちないようにする
   const height = Math.min(grid.length, usageGrid.length);
 
   for (let y = 0; y < height; y++) {
     const gridRow = grid[y];
     const usageRow = usageGrid[y];
 
-    // 行が壊れている場合はスキップ
     if (!Array.isArray(gridRow) || !Array.isArray(usageRow)) {
       continue;
     }
 
-    // 列数がずれていても落ちないようにする
     const width = Math.min(gridRow.length, usageRow.length);
 
     for (let x = 0; x < width; x++) {
@@ -239,16 +239,12 @@ function canPlace(grid, usageGrid, word, x, y, dx, dy) {
       overlapCount++;
       reusedCellCount++;
 
-      // 新しい単語をこのマスに重ねることで増えるペア数。
-      // usage=1 の場所に置くと +1、usage=2 の場所に置くと +2。
       pairOverlapGain += currentUsage;
 
-      // usage 1 -> 2 になるマスは「重複マス数」が新しく1増える。
       if (currentUsage === 1) {
         overlapCellGain++;
       }
 
-      // すでに多くの単語が通っている場所をさらに使うほど強く加点。
       heavyOverlapScore += currentUsage * currentUsage;
       futureMaxUsage = Math.max(futureMaxUsage, currentUsage + 1);
     } else {
@@ -300,48 +296,6 @@ function getAllPlacements(grid, usageGrid, word) {
   return placements;
 }
 
-function placementScore(placement, word, context = {}) {
-  const {
-    affinity = 0,
-    usageAffinity = 0,
-    potential = 0,
-    placedCount = 0,
-    size = 15
-  } = context;
-
-  const hasOverlap = placement.overlapCount > 0;
-
-  // 重複優先スコア。
-  // pairOverlapGain と heavyOverlapScore をかなり強くして、
-  // 既存の重複マスにさらに重ねる配置を選びやすくしています。
-  let score =
-    placement.pairOverlapGain * 12000 +
-    placement.heavyOverlapScore * 3600 +
-    placement.overlapCellGain * 5200 +
-    placement.overlapCount * 1800 +
-    placement.futureMaxUsage * 900 +
-    usageAffinity * 260 +
-    affinity * 180 +
-    potential * 28 -
-    placement.newCellCount * 180 +
-    word.length * 4;
-
-  // すでに単語が置かれているのに全く重ならない配置は強く減点。
-  if (placedCount > 0 && !hasOverlap) {
-    score -= size <= 10 ? 2200 : 1400;
-  }
-
-  // 小さい盤面ほど新規マスを使いすぎないようにする。
-  if (size <= 10) {
-    score -= placement.newCellCount * 80;
-  }
-
-  // 完全に同点が続くと同じような盤面になりやすいので、少しだけ揺らぎを入れる。
-  score += Math.random() * 0.001;
-
-  return score;
-}
-
 function placeWordAt(grid, usageGrid, word, placement) {
   const { x, y, dx, dy } = placement;
 
@@ -356,6 +310,7 @@ function placeWordAt(grid, usageGrid, word, placement) {
 
 function fillGrid(grid) {
   const usedLetters = [...new Set(grid.flat().filter(Boolean))];
+
   const fallbackLetters =
     "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワンABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -370,9 +325,96 @@ function fillGrid(grid) {
   }
 }
 
+function getCenteredPlacement(size, word, dx, dy) {
+  const center = Math.floor(size / 2);
+  const offset = Math.floor((word.length - 1) / 2);
+
+  const startX = center - dx * offset;
+  const startY = center - dy * offset;
+
+  return {
+    x: startX,
+    y: startY,
+    dx,
+    dy
+  };
+}
+
+function chooseFirstWordForCenter(words, size) {
+  const candidates = shuffle(words)
+    .filter(word => word.length <= size)
+    .sort((a, b) => {
+      const aPotential = getWordOverlapPotential(a);
+      const bPotential = getWordOverlapPotential(b);
+
+      if (aPotential !== bPotential) {
+        return bPotential - aPotential;
+      }
+
+      // 長すぎる単語より、中央から派生しやすい中くらいの単語を少し優先
+      const idealLength = Math.max(3, Math.floor(size * 0.65));
+      const aDistance = Math.abs(a.length - idealLength);
+      const bDistance = Math.abs(b.length - idealLength);
+
+      if (aDistance !== bDistance) {
+        return aDistance - bDistance;
+      }
+
+      return Math.random() - 0.5;
+    });
+
+  return candidates[0] || null;
+}
+
+function placeFirstWordAtCenter(grid, usageGrid, remainingWords, size) {
+  const firstWord = chooseFirstWordForCenter(remainingWords, size);
+
+  if (!firstWord) {
+    return null;
+  }
+
+  const directions = shuffle(CENTER_DIRECTIONS);
+
+  for (const [dx, dy] of directions) {
+    const base = getCenteredPlacement(size, firstWord, dx, dy);
+
+    const check = canPlace(
+      grid,
+      usageGrid,
+      firstWord,
+      base.x,
+      base.y,
+      base.dx,
+      base.dy
+    );
+
+    if (check && check.ok) {
+      const placement = {
+        x: base.x,
+        y: base.y,
+        dx: base.dx,
+        dy: base.dy,
+        overlapCount: 0,
+        overlapCellGain: 0,
+        pairOverlapGain: 0,
+        heavyOverlapScore: 0,
+        newCellCount: firstWord.length,
+        reusedCellCount: 0,
+        futureMaxUsage: 1
+      };
+
+      placeWordAt(grid, usageGrid, firstWord, placement);
+      return firstWord;
+    }
+  }
+
+  return null;
+}
+
 function createDynamicCandidates(remainingWords, grid, usageGrid, size) {
   const boardLetterCounts = getBoardLetterCounts(grid);
   const usageLetterCounts = getUsageLetterCounts(grid, usageGrid);
+
   const hasPlacedLetters = Object.keys(boardLetterCounts).length > 0;
   const limit = getCandidateLimit(size);
 
@@ -411,8 +453,94 @@ function createDynamicCandidates(remainingWords, grid, usageGrid, size) {
     .slice(0, limit);
 }
 
-function chooseBestStep(grid, usageGrid, remainingWords, size, placedCount, deadline) {
-  const candidates = createDynamicCandidates(remainingWords, grid, usageGrid, size);
+function placementScoreByOverlapRatio(placement, word, context = {}) {
+  const {
+    affinity = 0,
+    usageAffinity = 0,
+    potential = 0,
+    placedCount = 0,
+    size = 15
+  } = context;
+
+  const overlapRatio = placement.overlapCount / word.length;
+  const hasOverlap = placement.overlapCount > 0;
+
+  let score =
+    overlapRatio * 90000 +
+    placement.heavyOverlapScore * 22000 +
+    placement.pairOverlapGain * 18000 +
+    placement.futureMaxUsage * 9000 +
+    placement.overlapCount * 6000 +
+    placement.overlapCellGain * 1600 +
+    usageAffinity * 650 +
+    affinity * 260 +
+    potential * 35 -
+    placement.newCellCount * 1100 +
+    word.length * 2;
+
+  if (placedCount > 0 && !hasOverlap) {
+    score -= size <= 10 ? 16000 : 10000;
+  }
+
+  if (size <= 10) {
+    score -= placement.newCellCount * 700;
+  } else if (size <= 15) {
+    score -= placement.newCellCount * 450;
+  } else {
+    score -= placement.newCellCount * 260;
+  }
+
+  score += Math.random() * 0.001;
+
+  return score;
+}
+
+function placementScoreBalanced(placement, word, context = {}) {
+  const {
+    affinity = 0,
+    usageAffinity = 0,
+    potential = 0,
+    placedCount = 0,
+    size = 15
+  } = context;
+
+  const hasOverlap = placement.overlapCount > 0;
+
+  let score =
+    placement.pairOverlapGain * 12000 +
+    placement.heavyOverlapScore * 8500 +
+    placement.overlapCellGain * 4600 +
+    placement.overlapCount * 2200 +
+    placement.futureMaxUsage * 2500 +
+    usageAffinity * 380 +
+    affinity * 220 +
+    potential * 30 -
+    placement.newCellCount * 260 +
+    word.length * 5;
+
+  if (placedCount > 0 && !hasOverlap) {
+    score -= size <= 10 ? 5000 : 3000;
+  }
+
+  score += Math.random() * 0.001;
+
+  return score;
+}
+
+function chooseBestStepByOverlapRatio(
+  grid,
+  usageGrid,
+  remainingWords,
+  size,
+  placedCount,
+  deadline
+) {
+  const candidates = createDynamicCandidates(
+    remainingWords,
+    grid,
+    usageGrid,
+    size
+  );
 
   let best = null;
 
@@ -424,13 +552,67 @@ function chooseBestStep(grid, usageGrid, remainingWords, size, placedCount, dead
     const placements = getAllPlacements(grid, usageGrid, candidate.word);
 
     for (const placement of placements) {
-      const score = placementScore(placement, candidate.word, {
-        affinity: candidate.affinity,
-        usageAffinity: candidate.usageAffinity,
-        potential: candidate.potential,
-        placedCount,
-        size
-      });
+      const score = placementScoreByOverlapRatio(
+        placement,
+        candidate.word,
+        {
+          affinity: candidate.affinity,
+          usageAffinity: candidate.usageAffinity,
+          potential: candidate.potential,
+          placedCount,
+          size
+        }
+      );
+
+      if (!best || score > best.score) {
+        best = {
+          word: candidate.word,
+          placement,
+          score
+        };
+      }
+    }
+  }
+
+  return best;
+}
+
+function chooseBestStepBalanced(
+  grid,
+  usageGrid,
+  remainingWords,
+  size,
+  placedCount,
+  deadline
+) {
+  const candidates = createDynamicCandidates(
+    remainingWords,
+    grid,
+    usageGrid,
+    size
+  );
+
+  let best = null;
+
+  for (const candidate of candidates) {
+    if (timeIsUp(deadline)) {
+      break;
+    }
+
+    const placements = getAllPlacements(grid, usageGrid, candidate.word);
+
+    for (const placement of placements) {
+      const score = placementScoreBalanced(
+        placement,
+        candidate.word,
+        {
+          affinity: candidate.affinity,
+          usageAffinity: candidate.usageAffinity,
+          potential: candidate.potential,
+          placedCount,
+          size
+        }
+      );
 
       if (!best || score > best.score) {
         best = {
@@ -447,7 +629,7 @@ function chooseBestStep(grid, usageGrid, remainingWords, size, placedCount, dead
 
 function chooseBestPlacementForFixedWord(grid, usageGrid, word, size, placedCount) {
   const boardLetterCounts = getBoardLetterCounts(grid);
-  const usageLetterCounts = getUsageLetterCounts(grid);
+  const usageLetterCounts = getUsageLetterCounts(grid, usageGrid);
 
   const context = {
     affinity: getWordBoardAffinity(word, boardLetterCounts),
@@ -467,7 +649,7 @@ function chooseBestPlacementForFixedWord(grid, usageGrid, word, size, placedCoun
   let bestPlacements = [];
 
   for (const placement of placements) {
-    const score = placementScore(placement, word, context);
+    const score = placementScoreBalanced(placement, word, context);
 
     if (score > bestScore) {
       bestScore = score;
@@ -486,6 +668,8 @@ function calculateUsageStats(usageGrid) {
   let overlapCellCount = 0;
   let overlapScore = 0;
   let maxUsage = 0;
+  let concentratedOverlapScore = 0;
+  let highOverlapCellCount = 0;
 
   if (!Array.isArray(usageGrid)) {
     return {
@@ -493,7 +677,9 @@ function calculateUsageStats(usageGrid) {
       totalUsageCount,
       overlapCellCount,
       overlapScore,
-      maxUsage
+      maxUsage,
+      concentratedOverlapScore,
+      highOverlapCellCount
     };
   }
 
@@ -511,6 +697,11 @@ function calculateUsageStats(usageGrid) {
       if (count >= 2) {
         overlapCellCount++;
         overlapScore += (count * (count - 1)) / 2;
+        concentratedOverlapScore += count * count * count;
+      }
+
+      if (count >= 3) {
+        highOverlapCellCount++;
       }
 
       if (count > maxUsage) {
@@ -524,7 +715,9 @@ function calculateUsageStats(usageGrid) {
     totalUsageCount,
     overlapCellCount,
     overlapScore,
-    maxUsage
+    maxUsage,
+    concentratedOverlapScore,
+    highOverlapCellCount
   };
 }
 
@@ -543,7 +736,9 @@ function scoreResult(result) {
     totalUsageCount: usageStats.totalUsageCount,
     overlapCellCount: usageStats.overlapCellCount,
     overlapScore: usageStats.overlapScore,
-    maxUsage: usageStats.maxUsage
+    maxUsage: usageStats.maxUsage,
+    concentratedOverlapScore: usageStats.concentratedOverlapScore,
+    highOverlapCellCount: usageStats.highOverlapCellCount
   };
 }
 
@@ -553,40 +748,115 @@ function isBetterResult(candidate, best) {
   const a = scoreResult(candidate);
   const b = scoreResult(best);
 
-  // 1. まず重複スコアを最優先
+  // 1. 高重複を強く評価
+  if (a.concentratedOverlapScore !== b.concentratedOverlapScore) {
+    return a.concentratedOverlapScore > b.concentratedOverlapScore;
+  }
+
+  // 2. 通常の重複スコア
   if (a.overlapScore !== b.overlapScore) {
     return a.overlapScore > b.overlapScore;
   }
 
-  // 2. 重複しているマス数
-  if (a.overlapCellCount !== b.overlapCellCount) {
-    return a.overlapCellCount > b.overlapCellCount;
-  }
-
-  // 3. 1マスあたりの最大重複数
+  // 3. 1マスに最大何語重なったか
   if (a.maxUsage !== b.maxUsage) {
     return a.maxUsage > b.maxUsage;
   }
 
-  // 4. 単語数もできるだけ維持
+  // 4. 3語以上重なっているマス数
+  if (a.highOverlapCellCount !== b.highOverlapCellCount) {
+    return a.highOverlapCellCount > b.highOverlapCellCount;
+  }
+
+  // 5. 重複しているマス数
+  if (a.overlapCellCount !== b.overlapCellCount) {
+    return a.overlapCellCount > b.overlapCellCount;
+  }
+
+  // 6. 単語数もできるだけ多く
   if (a.placedWordCount !== b.placedWordCount) {
     return a.placedWordCount > b.placedWordCount;
   }
 
-  // 5. 合計文字数
+  // 7. 合計文字数
   if (a.totalPlacedChars !== b.totalPlacedChars) {
     return a.totalPlacedChars > b.totalPlacedChars;
   }
 
-  // 6. 同じなら、少ないマスに詰め込めている方
+  // 8. 少ないマスに詰め込めている方
   return a.usedCellCount < b.usedCellCount;
 }
 
-function runDynamicOverlapAttempt(words, size, deadline) {
+function runCenterSeedOverlapAttempt(words, size, deadline) {
   const grid = createGrid(size);
   const usageGrid = createUsageGrid(size);
 
-  const remainingWords = createInitialWordOrder(words).filter(word => word.length <= size);
+  const remainingWords = createInitialWordOrder(words).filter(
+    word => word.length <= size
+  );
+
+  const placedWords = [];
+
+  const firstWord = placeFirstWordAtCenter(
+    grid,
+    usageGrid,
+    remainingWords,
+    size
+  );
+
+  if (firstWord) {
+    placedWords.push(firstWord);
+
+    const index = remainingWords.indexOf(firstWord);
+    if (index !== -1) {
+      remainingWords.splice(index, 1);
+    }
+  }
+
+  while (remainingWords.length > 0) {
+    if (timeIsUp(deadline)) {
+      break;
+    }
+
+    const best = chooseBestStepByOverlapRatio(
+      grid,
+      usageGrid,
+      remainingWords,
+      size,
+      placedWords.length,
+      deadline
+    );
+
+    if (!best) {
+      break;
+    }
+
+    placeWordAt(grid, usageGrid, best.word, best.placement);
+    placedWords.push(best.word);
+
+    const index = remainingWords.indexOf(best.word);
+    if (index !== -1) {
+      remainingWords.splice(index, 1);
+    }
+  }
+
+  fillGrid(grid);
+
+  return {
+    grid,
+    usageGrid,
+    placedWords
+  };
+}
+
+function runBalancedOverlapAttempt(words, size, deadline) {
+  const grid = createGrid(size);
+  const usageGrid = createUsageGrid(size);
+
+  const remainingWords = createInitialWordOrder(words).filter(
+    word => word.length <= size
+  );
+
   const placedWords = [];
 
   while (remainingWords.length > 0) {
@@ -594,7 +864,7 @@ function runDynamicOverlapAttempt(words, size, deadline) {
       break;
     }
 
-    const best = chooseBestStep(
+    const best = chooseBestStepBalanced(
       grid,
       usageGrid,
       remainingWords,
@@ -629,7 +899,10 @@ function runFastOverlapAttempt(words, size, deadline) {
   const grid = createGrid(size);
   const usageGrid = createUsageGrid(size);
 
-  const orderedWords = createInitialWordOrder(words).filter(word => word.length <= size);
+  const orderedWords = createInitialWordOrder(words).filter(
+    word => word.length <= size
+  );
+
   const placedWords = [];
 
   for (const word of orderedWords) {
@@ -669,9 +942,9 @@ function generateWordSearch(words, size) {
   let bestResult = null;
   let attemptsTried = 0;
 
-  // 最初の1回は精密探索。
+  // 最初は中央配置方式を必ず試す
   if (!timeIsUp(deadline)) {
-    const candidate = runDynamicOverlapAttempt(words, size, deadline);
+    const candidate = runCenterSeedOverlapAttempt(words, size, deadline);
     attemptsTried++;
 
     if (isBetterResult(candidate, bestResult)) {
@@ -679,25 +952,27 @@ function generateWordSearch(words, size) {
     }
   }
 
-  // 残り時間を使って、精密探索と高速探索を混ぜて多スタート探索。
+  // 残り時間で複数方式を試す
   while (!timeIsUp(deadline)) {
     const remainingMs = deadline - Date.now();
 
     let candidate;
 
-    // 残り時間が少ない場合は軽い探索に切り替えます。
-    if (remainingMs < 6000) {
+    if (remainingMs < 5000) {
       candidate = runFastOverlapAttempt(words, size, deadline);
     } else {
-      // 小さい盤面ほど精密探索を多めに、大きい盤面は高速探索も混ぜる。
-      const useDynamic =
-        size <= 12 ? Math.random() < 0.8 :
-        size <= 20 ? Math.random() < 0.55 :
-        Math.random() < 0.35;
+      const r = Math.random();
 
-      candidate = useDynamic
-        ? runDynamicOverlapAttempt(words, size, deadline)
-        : runFastOverlapAttempt(words, size, deadline);
+      if (r < 0.65) {
+        // 中央スタート + 重複割合重視
+        candidate = runCenterSeedOverlapAttempt(words, size, deadline);
+      } else if (r < 0.9) {
+        // 通常の重複バランス型
+        candidate = runBalancedOverlapAttempt(words, size, deadline);
+      } else {
+        // 高速型
+        candidate = runFastOverlapAttempt(words, size, deadline);
+      }
     }
 
     attemptsTried++;
@@ -712,7 +987,10 @@ function generateWordSearch(words, size) {
     attemptsTried++;
   }
 
-  const placedWords = bestResult.placedWords.sort((a, b) => a.localeCompare(b));
+  const placedWords = bestResult.placedWords.sort((a, b) =>
+    a.localeCompare(b)
+  );
+
   const placedWordCount = placedWords.length;
 
   const totalPlacedChars = placedWords.reduce(
@@ -736,6 +1014,8 @@ function generateWordSearch(words, size) {
     overlapCellCount: usageStats.overlapCellCount,
     overlapScore: usageStats.overlapScore,
     maxUsage: usageStats.maxUsage,
+    concentratedOverlapScore: usageStats.concentratedOverlapScore,
+    highOverlapCellCount: usageStats.highOverlapCellCount,
 
     attemptsTried,
     generationMs
@@ -761,14 +1041,23 @@ app.post("/api/generate", (req, res) => {
     }
 
     const words = loadWords(WORD_FILES[wordType]);
+
+    if (words.length === 0) {
+      return res.status(400).json({
+        error: "単語リストが空です。"
+      });
+    }
+
     const result = generateWordSearch(words, numericSize);
 
     res.json(result);
   } catch (error) {
-    console.error(error);
+    console.error("API /api/generate error:", error);
 
     res.status(500).json({
-      error: "サーバー内部エラーが発生しました。"
+      error: "サーバー内部エラーが発生しました。",
+      detail: error.message,
+      stack: process.env.NODE_ENV === "production" ? undefined : error.stack
     });
   }
 });
