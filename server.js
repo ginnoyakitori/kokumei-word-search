@@ -1,12 +1,15 @@
-const express = require("express");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const {
+  Worker,
+  isMainThread,
+  parentPort,
+  workerData
+} = require("worker_threads");
 
-const app = express();
 const PORT = process.env.PORT || 3000;
-
-app.use(express.json({ limit: "1mb" }));
-app.use(express.static(path.join(__dirname)));
+const PUBLIC_DIR = path.join(__dirname, "public");
 
 const WORD_FILES = {
   countries: ["kokumei.txt", "countries.txt"],
@@ -1176,56 +1179,191 @@ function generateWordSearch(words, size, mode = "count") {
   };
 }
 
-app.post("/api/generate", (req, res) => {
-  try {
-    const { wordType, size, mode = "count" } = req.body;
+// ============================================================
+// サーバー部分（メインスレッド）と生成ワーカー
+// 生成は最大50秒かかる重い同期処理なので、別スレッド（worker）で実行する。
+// こうしておけば生成中でも他のリクエストやヘルスチェックに応答できる。
+// ============================================================
 
-    if (!WORD_FILES[wordType]) {
-      return res.status(400).json({
-        error: "無効な単語リストです。"
-      });
-    }
+// 同時に動かす生成ジョブの上限。CPUが少ない環境で全部が遅くならないよう、
+// 既定では CPU 数の半分（1〜4）。環境変数 MAX_CONCURRENT_JOBS で変更できる。
+const MAX_CONCURRENT_JOBS =
+  Number(process.env.MAX_CONCURRENT_JOBS) ||
+  Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2)));
 
-    if (!MODES.includes(mode)) {
-      return res.status(400).json({
-        error: "無効な生成モードです。"
-      });
-    }
+// 生成時間の上限に加える猶予。これを超えたワーカーは強制終了する
+const WORKER_GRACE_MS = 15_000;
 
-    const numericSize = Number(size);
+let runningJobs = 0;
 
-    if (!Number.isInteger(numericSize) || numericSize < 5 || numericSize > 30) {
-      return res.status(400).json({
-        error: "盤面サイズは 5〜30 の整数で指定してください。"
-      });
-    }
-
-    const words = loadWords(WORD_FILES[wordType]);
-
-    if (words.length === 0) {
-      return res.status(400).json({
-        error: "単語リストが空です。"
-      });
-    }
-
-    const result = generateWordSearch(words, numericSize, mode);
-
-    res.json(result);
-  } catch (error) {
-    console.error("API /api/generate error:", error);
-
-    res.status(500).json({
-      error: "サーバー内部エラーが発生しました。",
-      detail: error.message,
-      stack: process.env.NODE_ENV === "production" ? undefined : error.stack
+function runGenerationInWorker(words, size, mode, onWorkerCreated) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(__filename, {
+      workerData: { words, size, mode }
     });
+
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      worker.terminate();
+      finish(reject, new Error("生成がタイムアウトしました。"));
+    }, GENERATION_TIME_LIMIT_MS + WORKER_GRACE_MS);
+
+    function finish(callback, value) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    }
+
+    worker.once("message", message => {
+      if (message.error) {
+        finish(reject, new Error(message.error));
+      } else {
+        finish(resolve, message.result);
+      }
+    });
+
+    worker.once("error", error => finish(reject, error));
+
+    worker.once("exit", code => {
+      finish(reject, new Error(`生成ワーカーが終了しました（code ${code}）。`));
+    });
+
+    onWorkerCreated(worker);
+  });
+}
+
+function startServer() {
+  const express = require("express");
+
+  const app = express();
+
+  app.use(express.json({ limit: "1mb" }));
+
+  // 公開するのは public フォルダだけ（server.js や単語ファイルを配信しない）
+  app.use(express.static(PUBLIC_DIR));
+
+  app.get("/healthz", (req, res) => {
+    res.json({
+      ok: true,
+      runningJobs,
+      maxConcurrentJobs: MAX_CONCURRENT_JOBS
+    });
+  });
+
+  app.post("/api/generate", async (req, res) => {
+    let worker = null;
+    let jobStarted = false;
+    let abortedByClient = false;
+
+    try {
+      const { wordType, size, mode = "count" } = req.body;
+
+      if (!WORD_FILES[wordType]) {
+        return res.status(400).json({
+          error: "無効な単語リストです。"
+        });
+      }
+
+      if (!MODES.includes(mode)) {
+        return res.status(400).json({
+          error: "無効な生成モードです。"
+        });
+      }
+
+      const numericSize = Number(size);
+
+      if (!Number.isInteger(numericSize) || numericSize < 5 || numericSize > 30) {
+        return res.status(400).json({
+          error: "盤面サイズは 5〜30 の整数で指定してください。"
+        });
+      }
+
+      const words = loadWords(WORD_FILES[wordType]);
+
+      if (words.length === 0) {
+        return res.status(400).json({
+          error: "単語リストが空です。"
+        });
+      }
+
+      // 上限を超えていたら待たせずに断る（50秒待たせるよりも分かりやすい）
+      if (runningJobs >= MAX_CONCURRENT_JOBS) {
+        res.set("Retry-After", "10");
+
+        return res.status(429).json({
+          error:
+            "現在サーバーが混み合っています。しばらくしてからもう一度お試しください。"
+        });
+      }
+
+      runningJobs++;
+      jobStarted = true;
+
+      // ブラウザが閉じられた・通信が切れた場合は、無駄に回り続けないよう生成を中止する
+      res.on("close", () => {
+        if (!res.writableFinished && worker) {
+          abortedByClient = true;
+          worker.terminate();
+        }
+      });
+
+      const result = await runGenerationInWorker(
+        words,
+        numericSize,
+        mode,
+        createdWorker => {
+          worker = createdWorker;
+        }
+      );
+
+      res.json(result);
+    } catch (error) {
+      // クライアントが切断して中止した場合は想定内なので、エラーとして扱わない
+      if (abortedByClient) {
+        return;
+      }
+
+      console.error("API /api/generate error:", error);
+
+      if (!res.headersSent && !res.destroyed) {
+        res.status(500).json({
+          error: "サーバー内部エラーが発生しました。",
+          detail: error.message,
+          stack: process.env.NODE_ENV === "production" ? undefined : error.stack
+        });
+      }
+    } finally {
+      if (jobStarted) {
+        runningJobs--;
+      }
+    }
+  });
+
+  app.get("/", (req, res) => {
+    res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+  });
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(
+      `Server is running on port ${PORT} (max concurrent jobs: ${MAX_CONCURRENT_JOBS})`
+    );
+  });
+}
+
+function runWorker() {
+  try {
+    const { words, size, mode } = workerData;
+
+    parentPort.postMessage({ result: generateWordSearch(words, size, mode) });
+  } catch (error) {
+    parentPort.postMessage({ error: error.message });
   }
-});
+}
 
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+if (isMainThread) {
+  startServer();
+} else {
+  runWorker();
+}
