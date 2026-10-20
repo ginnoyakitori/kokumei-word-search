@@ -751,49 +751,47 @@ function scoreResult(result) {
   };
 }
 
-function isBetterResult(candidate, best) {
-  if (!best) return true;
+// モードごとの比較順序。先頭の指標ほど優先される（最後に usedCellCount が小さい方を優先）
+const COMPARE_KEYS = {
+  // 語数重視：配置できた単語数を最優先
+  count: [
+    "placedWordCount",
+    "concentratedOverlapScore",
+    "overlapScore",
+    "maxUsage",
+    "highOverlapCellCount",
+    "overlapCellCount",
+    "totalPlacedChars"
+  ],
+  // 重複重視：高重複（1マスに多くの単語が重なる）を最優先
+  overlap: [
+    "concentratedOverlapScore",
+    "overlapScore",
+    "maxUsage",
+    "highOverlapCellCount",
+    "overlapCellCount",
+    "placedWordCount",
+    "totalPlacedChars"
+  ]
+};
 
+function compareResults(candidate, best, mode) {
   const a = scoreResult(candidate);
   const b = scoreResult(best);
 
-  // 1. 配置できた単語数を最優先
-  if (a.placedWordCount !== b.placedWordCount) {
-    return a.placedWordCount > b.placedWordCount;
+  for (const key of COMPARE_KEYS[mode]) {
+    if (a[key] !== b[key]) {
+      return a[key] - b[key];
+    }
   }
 
-  // 2. 高重複を評価
-  if (a.concentratedOverlapScore !== b.concentratedOverlapScore) {
-    return a.concentratedOverlapScore > b.concentratedOverlapScore;
-  }
+  return b.usedCellCount - a.usedCellCount;
+}
 
-  // 3. 通常の重複スコア
-  if (a.overlapScore !== b.overlapScore) {
-    return a.overlapScore > b.overlapScore;
-  }
+function isBetterResult(candidate, best, mode = "count") {
+  if (!best) return true;
 
-  // 4. 1マスに最大何語重なったか
-  if (a.maxUsage !== b.maxUsage) {
-    return a.maxUsage > b.maxUsage;
-  }
-
-  // 5. 3語以上重なっているマス数
-  if (a.highOverlapCellCount !== b.highOverlapCellCount) {
-    return a.highOverlapCellCount > b.highOverlapCellCount;
-  }
-
-  // 6. 重複しているマス数
-  if (a.overlapCellCount !== b.overlapCellCount) {
-    return a.overlapCellCount > b.overlapCellCount;
-  }
-
-  // 7. 合計文字数
-  if (a.totalPlacedChars !== b.totalPlacedChars) {
-    return a.totalPlacedChars > b.totalPlacedChars;
-  }
-
-  // 8. 少ないマスに詰め込めている方
-  return a.usedCellCount < b.usedCellCount;
+  return compareResults(candidate, best, mode) > 0;
 }
 
 // 貪欲法による1回分の構築。fillGrid は最後にまとめて行うのでここでは呼ばない
@@ -918,7 +916,7 @@ function fillRemainingWords(state, eligibleWords, size, deadline) {
 
 // ruin & recreate：数語を盤面から外して空きを作り、
 // 未配置の単語をその空きを使って（外した語より多く）詰め直す
-function ruinAndRecreate(state, eligibleWords, size) {
+function ruinAndRecreate(state, eligibleWords, size, config) {
   const next = cloneState(state);
 
   if (next.placements.length === 0) {
@@ -968,7 +966,7 @@ function ruinAndRecreate(state, eligibleWords, size) {
       );
 
       for (const placement of placements) {
-        const score = placementScoreCompact(placement, word, {
+        const score = config.recreateScore(placement, word, {
           placedCount: next.placements.length,
           size
         });
@@ -994,22 +992,32 @@ function ruinAndRecreate(state, eligibleWords, size) {
   return next;
 }
 
-function improveByLocalSearch(startState, eligibleWords, size, deadline) {
+function improveByLocalSearch(
+  startState,
+  eligibleWords,
+  size,
+  deadline,
+  config
+) {
   const eligibleCount = eligibleWords.length;
 
   let current = startState;
   let best = startState;
   let iterations = 0;
 
-  while (!timeIsUp(deadline) && best.placements.length < eligibleCount) {
-    const candidate = ruinAndRecreate(current, eligibleWords, size);
+  while (!timeIsUp(deadline)) {
+    if (config.stopWhenAllPlaced && best.placements.length >= eligibleCount) {
+      break;
+    }
+
+    const candidate = ruinAndRecreate(current, eligibleWords, size, config);
     iterations++;
 
-    // 同数でも受け入れる（横移動）ことで局所解から抜け出しやすくする
-    if (candidate.placements.length >= current.placements.length) {
+    // 同等でも受け入れる（横移動）ことで局所解から抜け出しやすくする
+    if (config.accept(candidate, current)) {
       current = candidate;
 
-      if (isBetterResult(candidate, best)) {
+      if (isBetterResult(candidate, best, config.mode)) {
         best = candidate;
       }
     }
@@ -1018,57 +1026,67 @@ function improveByLocalSearch(startState, eligibleWords, size, deadline) {
   return { best, iterations };
 }
 
-function generateWordSearch(words, size) {
+const MODES = ["count", "overlap"];
+
+// モードごとの設定：構築戦略・局所探索の採点と受理条件・時間配分を切り替える
+function getModeConfig(mode, words, size) {
+  const greedy = (centerSeed, scoreFn, preferShort) => dl =>
+    runGreedyAttempt(words, size, dl, { centerSeed, scoreFn, preferShort });
+
+  if (mode === "overlap") {
+    return {
+      mode,
+      // 重複重視は構築の多様性より局所探索の効果が大きいので、探索に多めに時間を割く
+      constructionRatio: 0.35,
+      // 重複には上限がないので、全単語を置けても終了せず時間いっぱい改善を続ける
+      stopWhenAllPlaced: false,
+      strategies: [
+        { weight: 0.45, run: greedy(true, placementScoreByOverlapRatio, false) },
+        { weight: 0.2, run: greedy(false, placementScoreBalanced, false) },
+        // 小さい盤面では「たくさん詰める」ほど重複も増えやすいので、詰め込み型も候補に混ぜる
+        { weight: 0.15, run: greedy(true, placementScoreCompact, true) },
+        { weight: 0.15, run: greedy(false, placementScoreCompact, true) },
+        { weight: 0.05, run: dl => runFastAttempt(words, size, dl) }
+      ],
+      recreateScore: (placement, word, context) =>
+        placementScoreByOverlapRatio(placement, word, context) +
+        Math.random() * 3000,
+      // 重複指標が同等以上なら採用（語数が減っても重複が増えるなら良しとする）
+      accept: (candidate, current) =>
+        compareResults(candidate, current, "overlap") >= 0
+    };
+  }
+
+  return {
+    mode: "count",
+    constructionRatio: 0.4,
+    stopWhenAllPlaced: true,
+    strategies: [
+      { weight: 0.3, run: greedy(false, placementScoreCompact, true) },
+      { weight: 0.2, run: greedy(true, placementScoreCompact, true) },
+      { weight: 0.2, run: greedy(true, placementScoreByOverlapRatio, false) },
+      { weight: 0.15, run: greedy(false, placementScoreBalanced, false) },
+      { weight: 0.15, run: dl => runFastAttempt(words, size, dl) }
+    ],
+    recreateScore: placementScoreCompact,
+    // 語数が減らなければ採用
+    accept: (candidate, current) =>
+      candidate.placements.length >= current.placements.length
+  };
+}
+
+function generateWordSearch(words, size, mode = "count") {
   const startTime = Date.now();
   const deadline = startTime + GENERATION_TIME_LIMIT_MS;
+
+  const config = getModeConfig(mode, words, size);
   const constructionDeadline =
-    startTime + GENERATION_TIME_LIMIT_MS * CONSTRUCTION_RATIO;
+    startTime + GENERATION_TIME_LIMIT_MS * config.constructionRatio;
 
   const eligibleWords = words.filter(word => word.length <= size);
   const eligibleCount = eligibleWords.length;
 
-  const strategies = [
-    {
-      weight: 0.3,
-      run: dl =>
-        runGreedyAttempt(words, size, dl, {
-          centerSeed: false,
-          scoreFn: placementScoreCompact,
-          preferShort: true
-        })
-    },
-    {
-      weight: 0.2,
-      run: dl =>
-        runGreedyAttempt(words, size, dl, {
-          centerSeed: true,
-          scoreFn: placementScoreCompact,
-          preferShort: true
-        })
-    },
-    {
-      weight: 0.2,
-      run: dl =>
-        runGreedyAttempt(words, size, dl, {
-          centerSeed: true,
-          scoreFn: placementScoreByOverlapRatio,
-          preferShort: false
-        })
-    },
-    {
-      weight: 0.15,
-      run: dl =>
-        runGreedyAttempt(words, size, dl, {
-          centerSeed: false,
-          scoreFn: placementScoreBalanced,
-          preferShort: false
-        })
-    },
-    {
-      weight: 0.15,
-      run: dl => runFastAttempt(words, size, dl)
-    }
-  ];
+  const strategies = config.strategies;
 
   function pickStrategy() {
     let r = Math.random();
@@ -1086,30 +1104,31 @@ function generateWordSearch(words, size) {
   let bestResult = null;
   let attemptsTried = 0;
 
-  // ---- フェーズ1：複数方式で初期配置を作り、語数が最大のものを採用 ----
+  // ---- フェーズ1：複数方式で初期配置を作り、モードの基準で最良のものを採用 ----
   do {
-    // 最初の1回は語数を稼ぎやすい「短い単語優先・コンパクト」方式を必ず試す
+    // 最初の1回は、そのモードで最も狙いに合う方式を必ず試す
     const strategy = attemptsTried === 0 ? strategies[0] : pickStrategy();
     const candidate = strategy.run(constructionDeadline);
     attemptsTried++;
 
-    if (isBetterResult(candidate, bestResult)) {
+    if (isBetterResult(candidate, bestResult, config.mode)) {
       bestResult = candidate;
     }
   } while (
     !timeIsUp(constructionDeadline) &&
-    bestResult.placements.length < eligibleCount
+    !(config.stopWhenAllPlaced && bestResult.placements.length >= eligibleCount)
   );
 
   // ---- フェーズ2：盤面全体を探して置ける単語を詰め込む ----
   fillRemainingWords(bestResult, eligibleWords, size, deadline);
 
-  // ---- フェーズ3：局所探索（ruin & recreate）で語数をさらに増やす ----
+  // ---- フェーズ3：局所探索（ruin & recreate）でモードの指標をさらに改善 ----
   const improved = improveByLocalSearch(
     bestResult,
     eligibleWords,
     size,
-    deadline
+    deadline,
+    config
   );
 
   bestResult = improved.best;
@@ -1131,6 +1150,7 @@ function generateWordSearch(words, size) {
   const generationMs = Date.now() - startTime;
 
   return {
+    mode: config.mode,
     grid: bestResult.grid,
     usageGrid: bestResult.usageGrid,
     placedWords,
@@ -1158,11 +1178,17 @@ function generateWordSearch(words, size) {
 
 app.post("/api/generate", (req, res) => {
   try {
-    const { wordType, size } = req.body;
+    const { wordType, size, mode = "count" } = req.body;
 
     if (!WORD_FILES[wordType]) {
       return res.status(400).json({
         error: "無効な単語リストです。"
+      });
+    }
+
+    if (!MODES.includes(mode)) {
+      return res.status(400).json({
+        error: "無効な生成モードです。"
       });
     }
 
@@ -1182,7 +1208,7 @@ app.post("/api/generate", (req, res) => {
       });
     }
 
-    const result = generateWordSearch(words, numericSize);
+    const result = generateWordSearch(words, numericSize, mode);
 
     res.json(result);
   } catch (error) {

@@ -268,9 +268,19 @@
     </div>
 
     <div>
+      <label for="mode">生成モード</label><br />
+      <select id="mode">
+        <option value="count">語数重視（できるだけ多くの単語を配置）</option>
+        <option value="overlap">重複重視（文字を共有する単語を多く）</option>
+      </select>
+    </div>
+
+    <div>
       <button id="generateBtn" type="button">生成する</button>
     </div>
   </div>
+
+  <div class="meta" id="modeDescription"></div>
 
   <div id="status"></div>
 
@@ -282,6 +292,11 @@
         <div class="stat-box">
           <div class="stat-label">使われた単語数</div>
           <div id="placedWordCount" class="stat-value">0</div>
+        </div>
+
+        <div class="stat-box">
+          <div class="stat-label">配置できなかった単語数</div>
+          <div id="unplacedWordCount" class="stat-value">0</div>
         </div>
 
         <div class="stat-box">

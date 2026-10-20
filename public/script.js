@@ -2,6 +2,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const generateBtn = document.getElementById("generateBtn");
   const wordTypeEl = document.getElementById("wordType");
   const gridSizeEl = document.getElementById("gridSize");
+  const modeEl = document.getElementById("mode");
+  const modeDescriptionEl = document.getElementById("modeDescription");
   const statusEl = document.getElementById("status");
 
   const gridEl = document.getElementById("grid");
@@ -9,6 +11,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const placedWordsEl = document.getElementById("placedWords");
 
   const placedWordCountEl = document.getElementById("placedWordCount");
+  const unplacedWordCountEl = document.getElementById("unplacedWordCount");
   const totalPlacedCharsEl = document.getElementById("totalPlacedChars");
   const boardSizeValueEl = document.getElementById("boardSizeValue");
 
@@ -22,6 +25,9 @@ document.addEventListener("DOMContentLoaded", () => {
     { name: "generateBtn", element: generateBtn },
     { name: "wordType", element: wordTypeEl },
     { name: "gridSize", element: gridSizeEl },
+    { name: "mode", element: modeEl },
+    { name: "modeDescription", element: modeDescriptionEl },
+    { name: "unplacedWordCount", element: unplacedWordCountEl },
     { name: "status", element: statusEl },
     { name: "grid", element: gridEl },
     { name: "usageGrid", element: usageGridEl },
@@ -52,11 +58,26 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
+  const MODE_DESCRIPTIONS = {
+    count:
+      "語数重視：盤面に入る単語の数を最大化します。重複は語数を増やすための手段として使います。",
+    overlap:
+      "重複重視：1つのマスを多くの単語が共有するように配置します。語数より重なりの多さを優先します。"
+  };
+
+  function updateModeDescription() {
+    modeDescriptionEl.textContent = MODE_DESCRIPTIONS[modeEl.value] || "";
+  }
+
+  modeEl.addEventListener("change", updateModeDescription);
+  updateModeDescription();
+
   generateBtn.addEventListener("click", generatePuzzle);
 
   async function generatePuzzle() {
     const wordType = wordTypeEl.value;
     const size = Number(gridSizeEl.value);
+    const mode = modeEl.value;
 
     if (!Number.isInteger(size) || size < 5 || size > 30) {
       statusEl.textContent = "盤面サイズは 5〜30 の整数で入力してください。";
@@ -74,7 +95,8 @@ document.addEventListener("DOMContentLoaded", () => {
         },
         body: JSON.stringify({
           wordType,
-          size
+          size,
+          mode
         })
       });
 
@@ -89,8 +111,10 @@ document.addEventListener("DOMContentLoaded", () => {
       renderWords(data.placedWords);
       renderStats(data);
 
+      const modeLabel = data.mode === "overlap" ? "重複重視" : "語数重視";
+
       statusEl.textContent =
-        `生成完了：${data.placedWordCount ?? 0}語 / ` +
+        `生成完了（${modeLabel}）：${data.placedWordCount ?? 0}語 / ` +
         `合計 ${data.totalPlacedChars ?? 0}文字 / ` +
         `重複マス ${data.overlapCellCount ?? 0}`;
     } catch (error) {
@@ -114,6 +138,7 @@ document.addEventListener("DOMContentLoaded", () => {
     placedWordsEl.innerHTML = "";
 
     placedWordCountEl.textContent = "0";
+    unplacedWordCountEl.textContent = "0";
     totalPlacedCharsEl.textContent = "0";
     boardSizeValueEl.textContent = `${size}×${size}`;
 
@@ -128,6 +153,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const size = data.size ?? 0;
 
     placedWordCountEl.textContent = data.placedWordCount ?? 0;
+    unplacedWordCountEl.textContent = data.unplacedWordCount ?? 0;
     totalPlacedCharsEl.textContent = data.totalPlacedChars ?? 0;
     boardSizeValueEl.textContent = `${size}×${size}`;
 
