@@ -33,7 +33,14 @@ const CENTER_DIRECTIONS = [
 ];
 
 // Render上で1分ギリギリにすると不安定になりやすいので少し余裕を持たせています
-const GENERATION_TIME_LIMIT_MS = 50_000;
+const GENERATION_TIME_LIMIT_MS =
+  Number(process.env.GENERATION_TIME_LIMIT_MS) || 50_000;
+
+// 全体時間のうち、最初の「初期配置づくり」に使う割合。残りは局所探索で語数を増やす
+const CONSTRUCTION_RATIO = 0.4;
+
+// 局所探索1回あたりに試す未配置単語の最大数
+const RECREATE_POOL_SAMPLE = 400;
 
 function getCandidateLimit(size) {
   if (size <= 7) return 220;
@@ -132,15 +139,7 @@ function getWordOverlapPotential(word) {
 function getBoardLetterCounts(grid) {
   const counts = {};
 
-  if (!Array.isArray(grid)) {
-    return counts;
-  }
-
   for (const row of grid) {
-    if (!Array.isArray(row)) {
-      continue;
-    }
-
     for (const letter of row) {
       if (letter) {
         counts[letter] = (counts[letter] || 0) + 1;
@@ -154,25 +153,10 @@ function getBoardLetterCounts(grid) {
 function getUsageLetterCounts(grid, usageGrid) {
   const counts = {};
 
-  if (!Array.isArray(grid) || !Array.isArray(usageGrid)) {
-    return counts;
-  }
-
-  const height = Math.min(grid.length, usageGrid.length);
-
-  for (let y = 0; y < height; y++) {
-    const gridRow = grid[y];
-    const usageRow = usageGrid[y];
-
-    if (!Array.isArray(gridRow) || !Array.isArray(usageRow)) {
-      continue;
-    }
-
-    const width = Math.min(gridRow.length, usageRow.length);
-
-    for (let x = 0; x < width; x++) {
-      const letter = gridRow[x];
-      const usage = usageRow[x];
+  for (let y = 0; y < grid.length; y++) {
+    for (let x = 0; x < grid[y].length; x++) {
+      const letter = grid[y][x];
+      const usage = usageGrid[y][x];
 
       if (letter && usage > 0) {
         counts[letter] = (counts[letter] || 0) + usage;
@@ -275,19 +259,54 @@ function getAllPlacements(grid, usageGrid, word) {
         const result = canPlace(grid, usageGrid, word, x, y, dx, dy);
 
         if (result && result.ok) {
-          placements.push({
-            x,
-            y,
-            dx,
-            dy,
-            overlapCount: result.overlapCount,
-            overlapCellGain: result.overlapCellGain,
-            pairOverlapGain: result.pairOverlapGain,
-            heavyOverlapScore: result.heavyOverlapScore,
-            newCellCount: result.newCellCount,
-            reusedCellCount: result.reusedCellCount,
-            futureMaxUsage: result.futureMaxUsage
-          });
+          placements.push({ x, y, dx, dy, ...result });
+        }
+      }
+    }
+  }
+
+  return placements;
+}
+
+// 盤面の「変化したマス」を必ず通る配置だけを列挙する（高速）。
+// 以前置けなかった単語が新たに置けるようになるのは、
+// 空いたマス／新しく埋まったマスを通る配置だけなので、これで十分。
+function getPlacementsThroughCells(grid, usageGrid, word, touchedKeys, size) {
+  const seen = new Set();
+  const placements = [];
+
+  for (const key of touchedKeys) {
+    const cy = Math.floor(key / size);
+    const cx = key % size;
+    const cell = grid[cy][cx];
+
+    for (let d = 0; d < DIRECTIONS.length; d++) {
+      const [dx, dy] = DIRECTIONS[d];
+
+      for (let i = 0; i < word.length; i++) {
+        if (cell !== "" && cell !== word[i]) {
+          continue;
+        }
+
+        const x = cx - dx * i;
+        const y = cy - dy * i;
+
+        if (x < 0 || y < 0 || x >= size || y >= size) {
+          continue;
+        }
+
+        const placementKey = (y * size + x) * 8 + d;
+
+        if (seen.has(placementKey)) {
+          continue;
+        }
+
+        seen.add(placementKey);
+
+        const result = canPlace(grid, usageGrid, word, x, y, dx, dy);
+
+        if (result && result.ok) {
+          placements.push({ x, y, dx, dy, ...result });
         }
       }
     }
@@ -308,6 +327,50 @@ function placeWordAt(grid, usageGrid, word, placement) {
   }
 }
 
+function toPlacementRecord(word, placement) {
+  return {
+    word,
+    x: placement.x,
+    y: placement.y,
+    dx: placement.dx,
+    dy: placement.dy
+  };
+}
+
+// 配置済みの単語を盤面から取り除く。使用数が0になったマスのキーを touched に追加する
+function removePlacementFromState(state, record, touched) {
+  const size = state.grid.length;
+
+  for (let i = 0; i < record.word.length; i++) {
+    const nx = record.x + record.dx * i;
+    const ny = record.y + record.dy * i;
+
+    state.usageGrid[ny][nx]--;
+
+    if (state.usageGrid[ny][nx] <= 0) {
+      state.usageGrid[ny][nx] = 0;
+      state.grid[ny][nx] = "";
+      touched.add(ny * size + nx);
+    }
+  }
+}
+
+function addPlacementCellsToTouched(record, size, touched) {
+  for (let i = 0; i < record.word.length; i++) {
+    const nx = record.x + record.dx * i;
+    const ny = record.y + record.dy * i;
+    touched.add(ny * size + nx);
+  }
+}
+
+function cloneState(state) {
+  return {
+    grid: state.grid.map(row => [...row]),
+    usageGrid: state.usageGrid.map(row => [...row]),
+    placements: [...state.placements]
+  };
+}
+
 function fillGrid(grid) {
   const usedLetters = [...new Set(grid.flat().filter(Boolean))];
 
@@ -315,11 +378,12 @@ function fillGrid(grid) {
     "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワンABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
   const letters = usedLetters.length > 0 ? usedLetters.join("") : fallbackLetters;
+  const letterArray = [...letters];
 
   for (let y = 0; y < grid.length; y++) {
     for (let x = 0; x < grid.length; x++) {
       if (grid[y][x] === "") {
-        grid[y][x] = letters[Math.floor(Math.random() * letters.length)];
+        grid[y][x] = letterArray[Math.floor(Math.random() * letterArray.length)];
       }
     }
   }
@@ -329,12 +393,9 @@ function getCenteredPlacement(size, word, dx, dy) {
   const center = Math.floor(size / 2);
   const offset = Math.floor((word.length - 1) / 2);
 
-  const startX = center - dx * offset;
-  const startY = center - dy * offset;
-
   return {
-    x: startX,
-    y: startY,
+    x: center - dx * offset,
+    y: center - dy * offset,
     dx,
     dy
   };
@@ -389,68 +450,61 @@ function placeFirstWordAtCenter(grid, usageGrid, remainingWords, size) {
     );
 
     if (check && check.ok) {
-      const placement = {
-        x: base.x,
-        y: base.y,
-        dx: base.dx,
-        dy: base.dy,
-        overlapCount: 0,
-        overlapCellGain: 0,
-        pairOverlapGain: 0,
-        heavyOverlapScore: 0,
-        newCellCount: firstWord.length,
-        reusedCellCount: 0,
-        futureMaxUsage: 1
-      };
-
-      placeWordAt(grid, usageGrid, firstWord, placement);
-      return firstWord;
+      placeWordAt(grid, usageGrid, firstWord, base);
+      return { word: firstWord, placement: base };
     }
   }
 
   return null;
 }
 
-function createDynamicCandidates(remainingWords, grid, usageGrid, size) {
+function createDynamicCandidates(
+  remainingWords,
+  grid,
+  usageGrid,
+  size,
+  preferShort
+) {
   const boardLetterCounts = getBoardLetterCounts(grid);
   const usageLetterCounts = getUsageLetterCounts(grid, usageGrid);
 
   const hasPlacedLetters = Object.keys(boardLetterCounts).length > 0;
   const limit = getCandidateLimit(size);
 
-  return shuffle(remainingWords)
-    .map(word => {
-      const affinity = getWordBoardAffinity(word, boardLetterCounts);
-      const usageAffinity = getWordBoardAffinity(word, usageLetterCounts);
-      const potential = getWordOverlapPotential(word);
+  const scored = shuffle(remainingWords).map(word => ({
+    word,
+    affinity: getWordBoardAffinity(word, boardLetterCounts),
+    usageAffinity: getWordBoardAffinity(word, usageLetterCounts),
+    potential: getWordOverlapPotential(word),
+    // 短い単語ほど少ないマスで置けるので、語数を稼ぎやすい（少しノイズを入れて多様化）
+    shortKey: word.length + Math.random() * 3
+  }));
 
-      return {
-        word,
-        affinity,
-        usageAffinity,
-        potential
-      };
-    })
-    .sort((a, b) => {
-      if (hasPlacedLetters && a.usageAffinity !== b.usageAffinity) {
-        return b.usageAffinity - a.usageAffinity;
-      }
+  scored.sort((a, b) => {
+    if (preferShort && a.shortKey !== b.shortKey) {
+      return a.shortKey - b.shortKey;
+    }
 
-      if (hasPlacedLetters && a.affinity !== b.affinity) {
-        return b.affinity - a.affinity;
-      }
+    if (hasPlacedLetters && a.usageAffinity !== b.usageAffinity) {
+      return b.usageAffinity - a.usageAffinity;
+    }
 
-      if (a.potential !== b.potential) {
-        return b.potential - a.potential;
-      }
+    if (hasPlacedLetters && a.affinity !== b.affinity) {
+      return b.affinity - a.affinity;
+    }
 
-      if (a.word.length !== b.word.length) {
-        return a.word.length - b.word.length;
-      }
+    if (a.potential !== b.potential) {
+      return b.potential - a.potential;
+    }
 
-      return Math.random() - 0.5;
-    })
-    .slice(0, limit);
+    if (a.word.length !== b.word.length) {
+      return a.word.length - b.word.length;
+    }
+
+    return Math.random() - 0.5;
+  });
+
+  return scored.slice(0, limit);
 }
 
 function placementScoreByOverlapRatio(placement, word, context = {}) {
@@ -527,72 +581,47 @@ function placementScoreBalanced(placement, word, context = {}) {
   return score;
 }
 
-function chooseBestStepByOverlapRatio(
-  grid,
-  usageGrid,
-  remainingWords,
-  size,
-  placedCount,
-  deadline
-) {
-  const candidates = createDynamicCandidates(
-    remainingWords,
-    grid,
-    usageGrid,
-    size
-  );
+// 語数最大化向け：新しく消費するマスを最小にし、既存の文字を再利用する配置を優先
+function placementScoreCompact(placement, word, context = {}) {
+  const { placedCount = 0 } = context;
 
-  let best = null;
+  let score =
+    -placement.newCellCount * 3000 +
+    placement.pairOverlapGain * 600 +
+    placement.heavyOverlapScore * 300 +
+    placement.overlapCellGain * 400 -
+    word.length * 150;
 
-  for (const candidate of candidates) {
-    if (timeIsUp(deadline)) {
-      break;
-    }
-
-    const placements = getAllPlacements(grid, usageGrid, candidate.word);
-
-    for (const placement of placements) {
-      const score = placementScoreByOverlapRatio(
-        placement,
-        candidate.word,
-        {
-          affinity: candidate.affinity,
-          usageAffinity: candidate.usageAffinity,
-          potential: candidate.potential,
-          placedCount,
-          size
-        }
-      );
-
-      if (!best || score > best.score) {
-        best = {
-          word: candidate.word,
-          placement,
-          score
-        };
-      }
-    }
+  if (placedCount > 0 && placement.overlapCount === 0) {
+    score -= 1500;
   }
 
-  return best;
+  // 少しノイズを入れて、局所探索や複数試行で多様な盤面が出るようにする
+  score += Math.random() * 400;
+
+  return score;
 }
 
-function chooseBestStepBalanced(
+function chooseBestStep(
   grid,
   usageGrid,
   remainingWords,
   size,
   placedCount,
-  deadline
+  deadline,
+  scoreFn,
+  preferShort
 ) {
   const candidates = createDynamicCandidates(
     remainingWords,
     grid,
     usageGrid,
-    size
+    size,
+    preferShort
   );
 
   let best = null;
+  const dead = [];
 
   for (const candidate of candidates) {
     if (timeIsUp(deadline)) {
@@ -601,18 +630,20 @@ function chooseBestStepBalanced(
 
     const placements = getAllPlacements(grid, usageGrid, candidate.word);
 
+    // 盤面は埋まる一方なので、今置けない単語は今後も置けない → 除外して無駄な探索を減らす
+    if (placements.length === 0) {
+      dead.push(candidate.word);
+      continue;
+    }
+
     for (const placement of placements) {
-      const score = placementScoreBalanced(
-        placement,
-        candidate.word,
-        {
-          affinity: candidate.affinity,
-          usageAffinity: candidate.usageAffinity,
-          potential: candidate.potential,
-          placedCount,
-          size
-        }
-      );
+      const score = scoreFn(placement, candidate.word, {
+        affinity: candidate.affinity,
+        usageAffinity: candidate.usageAffinity,
+        potential: candidate.potential,
+        placedCount,
+        size
+      });
 
       if (!best || score > best.score) {
         best = {
@@ -624,7 +655,7 @@ function chooseBestStepBalanced(
     }
   }
 
-  return best;
+  return { best, dead };
 }
 
 function chooseBestPlacementForFixedWord(grid, usageGrid, word, size, placedCount) {
@@ -671,23 +702,7 @@ function calculateUsageStats(usageGrid) {
   let concentratedOverlapScore = 0;
   let highOverlapCellCount = 0;
 
-  if (!Array.isArray(usageGrid)) {
-    return {
-      usedCellCount,
-      totalUsageCount,
-      overlapCellCount,
-      overlapScore,
-      maxUsage,
-      concentratedOverlapScore,
-      highOverlapCellCount
-    };
-  }
-
   for (const row of usageGrid) {
-    if (!Array.isArray(row)) {
-      continue;
-    }
-
     for (const count of row) {
       if (count > 0) {
         usedCellCount++;
@@ -722,23 +737,17 @@ function calculateUsageStats(usageGrid) {
 }
 
 function scoreResult(result) {
-  const totalPlacedChars = result.placedWords.reduce(
-    (sum, word) => sum + word.length,
+  const totalPlacedChars = result.placements.reduce(
+    (sum, p) => sum + p.word.length,
     0
   );
 
   const usageStats = calculateUsageStats(result.usageGrid);
 
   return {
-    placedWordCount: result.placedWords.length,
+    placedWordCount: result.placements.length,
     totalPlacedChars,
-    usedCellCount: usageStats.usedCellCount,
-    totalUsageCount: usageStats.totalUsageCount,
-    overlapCellCount: usageStats.overlapCellCount,
-    overlapScore: usageStats.overlapScore,
-    maxUsage: usageStats.maxUsage,
-    concentratedOverlapScore: usageStats.concentratedOverlapScore,
-    highOverlapCellCount: usageStats.highOverlapCellCount
+    ...usageStats
   };
 }
 
@@ -748,34 +757,34 @@ function isBetterResult(candidate, best) {
   const a = scoreResult(candidate);
   const b = scoreResult(best);
 
-  // 1. 高重複を強く評価
+  // 1. 配置できた単語数を最優先
+  if (a.placedWordCount !== b.placedWordCount) {
+    return a.placedWordCount > b.placedWordCount;
+  }
+
+  // 2. 高重複を評価
   if (a.concentratedOverlapScore !== b.concentratedOverlapScore) {
     return a.concentratedOverlapScore > b.concentratedOverlapScore;
   }
 
-  // 2. 通常の重複スコア
+  // 3. 通常の重複スコア
   if (a.overlapScore !== b.overlapScore) {
     return a.overlapScore > b.overlapScore;
   }
 
-  // 3. 1マスに最大何語重なったか
+  // 4. 1マスに最大何語重なったか
   if (a.maxUsage !== b.maxUsage) {
     return a.maxUsage > b.maxUsage;
   }
 
-  // 4. 3語以上重なっているマス数
+  // 5. 3語以上重なっているマス数
   if (a.highOverlapCellCount !== b.highOverlapCellCount) {
     return a.highOverlapCellCount > b.highOverlapCellCount;
   }
 
-  // 5. 重複しているマス数
+  // 6. 重複しているマス数
   if (a.overlapCellCount !== b.overlapCellCount) {
     return a.overlapCellCount > b.overlapCellCount;
-  }
-
-  // 6. 単語数もできるだけ多く
-  if (a.placedWordCount !== b.placedWordCount) {
-    return a.placedWordCount > b.placedWordCount;
   }
 
   // 7. 合計文字数
@@ -787,115 +796,63 @@ function isBetterResult(candidate, best) {
   return a.usedCellCount < b.usedCellCount;
 }
 
-function runCenterSeedOverlapAttempt(words, size, deadline) {
+// 貪欲法による1回分の構築。fillGrid は最後にまとめて行うのでここでは呼ばない
+function runGreedyAttempt(words, size, deadline, options) {
+  const { centerSeed, scoreFn, preferShort } = options;
+
   const grid = createGrid(size);
   const usageGrid = createUsageGrid(size);
 
-  const remainingWords = createInitialWordOrder(words).filter(
+  let remainingWords = createInitialWordOrder(words).filter(
     word => word.length <= size
   );
 
-  const placedWords = [];
+  const placements = [];
 
-  const firstWord = placeFirstWordAtCenter(
-    grid,
-    usageGrid,
-    remainingWords,
-    size
-  );
+  if (centerSeed) {
+    const first = placeFirstWordAtCenter(grid, usageGrid, remainingWords, size);
 
-  if (firstWord) {
-    placedWords.push(firstWord);
-
-    const index = remainingWords.indexOf(firstWord);
-    if (index !== -1) {
-      remainingWords.splice(index, 1);
+    if (first) {
+      placements.push(toPlacementRecord(first.word, first.placement));
+      remainingWords = remainingWords.filter(word => word !== first.word);
     }
   }
 
-  while (remainingWords.length > 0) {
-    if (timeIsUp(deadline)) {
-      break;
-    }
-
-    const best = chooseBestStepByOverlapRatio(
+  while (remainingWords.length > 0 && !timeIsUp(deadline)) {
+    const { best, dead } = chooseBestStep(
       grid,
       usageGrid,
       remainingWords,
       size,
-      placedWords.length,
-      deadline
+      placements.length,
+      deadline,
+      scoreFn,
+      preferShort
     );
 
+    if (dead.length > 0) {
+      const deadSet = new Set(dead);
+      remainingWords = remainingWords.filter(word => !deadSet.has(word));
+    }
+
     if (!best) {
-      break;
+      // 時間切れ以外で best が無いのは「候補が全部置けなかった」場合。
+      // dead を除外済みなので次のループで次の候補群を試す。
+      if (dead.length === 0) {
+        break;
+      }
+      continue;
     }
 
     placeWordAt(grid, usageGrid, best.word, best.placement);
-    placedWords.push(best.word);
-
-    const index = remainingWords.indexOf(best.word);
-    if (index !== -1) {
-      remainingWords.splice(index, 1);
-    }
+    placements.push(toPlacementRecord(best.word, best.placement));
+    remainingWords = remainingWords.filter(word => word !== best.word);
   }
 
-  fillGrid(grid);
-
-  return {
-    grid,
-    usageGrid,
-    placedWords
-  };
+  return { grid, usageGrid, placements };
 }
 
-function runBalancedOverlapAttempt(words, size, deadline) {
-  const grid = createGrid(size);
-  const usageGrid = createUsageGrid(size);
-
-  const remainingWords = createInitialWordOrder(words).filter(
-    word => word.length <= size
-  );
-
-  const placedWords = [];
-
-  while (remainingWords.length > 0) {
-    if (timeIsUp(deadline)) {
-      break;
-    }
-
-    const best = chooseBestStepBalanced(
-      grid,
-      usageGrid,
-      remainingWords,
-      size,
-      placedWords.length,
-      deadline
-    );
-
-    if (!best) {
-      break;
-    }
-
-    placeWordAt(grid, usageGrid, best.word, best.placement);
-    placedWords.push(best.word);
-
-    const index = remainingWords.indexOf(best.word);
-    if (index !== -1) {
-      remainingWords.splice(index, 1);
-    }
-  }
-
-  fillGrid(grid);
-
-  return {
-    grid,
-    usageGrid,
-    placedWords
-  };
-}
-
-function runFastOverlapAttempt(words, size, deadline) {
+function runFastAttempt(words, size, deadline) {
   const grid = createGrid(size);
   const usageGrid = createUsageGrid(size);
 
@@ -903,7 +860,7 @@ function runFastOverlapAttempt(words, size, deadline) {
     word => word.length <= size
   );
 
-  const placedWords = [];
+  const placements = [];
 
   for (const word of orderedWords) {
     if (timeIsUp(deadline)) {
@@ -915,7 +872,7 @@ function runFastOverlapAttempt(words, size, deadline) {
       usageGrid,
       word,
       size,
-      placedWords.length
+      placements.length
     );
 
     if (!placement) {
@@ -923,73 +880,245 @@ function runFastOverlapAttempt(words, size, deadline) {
     }
 
     placeWordAt(grid, usageGrid, word, placement);
-    placedWords.push(word);
+    placements.push(toPlacementRecord(word, placement));
   }
 
-  fillGrid(grid);
+  return { grid, usageGrid, placements };
+}
 
-  return {
-    grid,
-    usageGrid,
-    placedWords
-  };
+// 未配置の単語を、盤面全体から探して置ける限り詰め込む（短い単語から）
+function fillRemainingWords(state, eligibleWords, size, deadline) {
+  const placedSet = new Set(state.placements.map(p => p.word));
+
+  const rest = shuffle(eligibleWords.filter(word => !placedSet.has(word))).sort(
+    (a, b) => a.length - b.length
+  );
+
+  for (const word of rest) {
+    if (timeIsUp(deadline)) {
+      break;
+    }
+
+    const placement = chooseBestPlacementForFixedWord(
+      state.grid,
+      state.usageGrid,
+      word,
+      size,
+      state.placements.length
+    );
+
+    if (!placement) {
+      continue;
+    }
+
+    placeWordAt(state.grid, state.usageGrid, word, placement);
+    state.placements.push(toPlacementRecord(word, placement));
+  }
+}
+
+// ruin & recreate：数語を盤面から外して空きを作り、
+// 未配置の単語をその空きを使って（外した語より多く）詰め直す
+function ruinAndRecreate(state, eligibleWords, size) {
+  const next = cloneState(state);
+
+  if (next.placements.length === 0) {
+    return next;
+  }
+
+  const removeCount = Math.min(
+    next.placements.length,
+    1 + Math.floor(Math.random() * 3)
+  );
+
+  const removedRecords = shuffle(next.placements).slice(0, removeCount);
+  const removedSet = new Set(removedRecords);
+  const touched = new Set();
+
+  for (const record of removedRecords) {
+    removePlacementFromState(next, record, touched);
+  }
+
+  next.placements = next.placements.filter(p => !removedSet.has(p));
+
+  const placedSet = new Set(next.placements.map(p => p.word));
+  const removedWords = removedRecords.map(p => p.word);
+
+  const otherUnplaced = shuffle(
+    eligibleWords.filter(
+      word => !placedSet.has(word) && !removedWords.includes(word)
+    )
+  ).slice(0, RECREATE_POOL_SAMPLE);
+
+  const pool = [...removedWords, ...otherUnplaced];
+
+  while (true) {
+    let best = null;
+
+    for (const word of pool) {
+      if (placedSet.has(word)) {
+        continue;
+      }
+
+      const placements = getPlacementsThroughCells(
+        next.grid,
+        next.usageGrid,
+        word,
+        touched,
+        size
+      );
+
+      for (const placement of placements) {
+        const score = placementScoreCompact(placement, word, {
+          placedCount: next.placements.length,
+          size
+        });
+
+        if (!best || score > best.score) {
+          best = { word, placement, score };
+        }
+      }
+    }
+
+    if (!best) {
+      break;
+    }
+
+    placeWordAt(next.grid, next.usageGrid, best.word, best.placement);
+
+    const record = toPlacementRecord(best.word, best.placement);
+    next.placements.push(record);
+    placedSet.add(best.word);
+    addPlacementCellsToTouched(record, size, touched);
+  }
+
+  return next;
+}
+
+function improveByLocalSearch(startState, eligibleWords, size, deadline) {
+  const eligibleCount = eligibleWords.length;
+
+  let current = startState;
+  let best = startState;
+  let iterations = 0;
+
+  while (!timeIsUp(deadline) && best.placements.length < eligibleCount) {
+    const candidate = ruinAndRecreate(current, eligibleWords, size);
+    iterations++;
+
+    // 同数でも受け入れる（横移動）ことで局所解から抜け出しやすくする
+    if (candidate.placements.length >= current.placements.length) {
+      current = candidate;
+
+      if (isBetterResult(candidate, best)) {
+        best = candidate;
+      }
+    }
+  }
+
+  return { best, iterations };
 }
 
 function generateWordSearch(words, size) {
   const startTime = Date.now();
   const deadline = startTime + GENERATION_TIME_LIMIT_MS;
+  const constructionDeadline =
+    startTime + GENERATION_TIME_LIMIT_MS * CONSTRUCTION_RATIO;
+
+  const eligibleWords = words.filter(word => word.length <= size);
+  const eligibleCount = eligibleWords.length;
+
+  const strategies = [
+    {
+      weight: 0.3,
+      run: dl =>
+        runGreedyAttempt(words, size, dl, {
+          centerSeed: false,
+          scoreFn: placementScoreCompact,
+          preferShort: true
+        })
+    },
+    {
+      weight: 0.2,
+      run: dl =>
+        runGreedyAttempt(words, size, dl, {
+          centerSeed: true,
+          scoreFn: placementScoreCompact,
+          preferShort: true
+        })
+    },
+    {
+      weight: 0.2,
+      run: dl =>
+        runGreedyAttempt(words, size, dl, {
+          centerSeed: true,
+          scoreFn: placementScoreByOverlapRatio,
+          preferShort: false
+        })
+    },
+    {
+      weight: 0.15,
+      run: dl =>
+        runGreedyAttempt(words, size, dl, {
+          centerSeed: false,
+          scoreFn: placementScoreBalanced,
+          preferShort: false
+        })
+    },
+    {
+      weight: 0.15,
+      run: dl => runFastAttempt(words, size, dl)
+    }
+  ];
+
+  function pickStrategy() {
+    let r = Math.random();
+
+    for (const strategy of strategies) {
+      if (r < strategy.weight) {
+        return strategy;
+      }
+      r -= strategy.weight;
+    }
+
+    return strategies[0];
+  }
 
   let bestResult = null;
   let attemptsTried = 0;
 
-  // 最初は中央配置方式を必ず試す
-  if (!timeIsUp(deadline)) {
-    const candidate = runCenterSeedOverlapAttempt(words, size, deadline);
+  // ---- フェーズ1：複数方式で初期配置を作り、語数が最大のものを採用 ----
+  do {
+    // 最初の1回は語数を稼ぎやすい「短い単語優先・コンパクト」方式を必ず試す
+    const strategy = attemptsTried === 0 ? strategies[0] : pickStrategy();
+    const candidate = strategy.run(constructionDeadline);
     attemptsTried++;
 
     if (isBetterResult(candidate, bestResult)) {
       bestResult = candidate;
     }
-  }
-
-  // 残り時間で複数方式を試す
-  while (!timeIsUp(deadline)) {
-    const remainingMs = deadline - Date.now();
-
-    let candidate;
-
-    if (remainingMs < 5000) {
-      candidate = runFastOverlapAttempt(words, size, deadline);
-    } else {
-      const r = Math.random();
-
-      if (r < 0.65) {
-        // 中央スタート + 重複割合重視
-        candidate = runCenterSeedOverlapAttempt(words, size, deadline);
-      } else if (r < 0.9) {
-        // 通常の重複バランス型
-        candidate = runBalancedOverlapAttempt(words, size, deadline);
-      } else {
-        // 高速型
-        candidate = runFastOverlapAttempt(words, size, deadline);
-      }
-    }
-
-    attemptsTried++;
-
-    if (isBetterResult(candidate, bestResult)) {
-      bestResult = candidate;
-    }
-  }
-
-  if (!bestResult) {
-    bestResult = runFastOverlapAttempt(words, size, Date.now() + 1000);
-    attemptsTried++;
-  }
-
-  const placedWords = bestResult.placedWords.sort((a, b) =>
-    a.localeCompare(b)
+  } while (
+    !timeIsUp(constructionDeadline) &&
+    bestResult.placements.length < eligibleCount
   );
+
+  // ---- フェーズ2：盤面全体を探して置ける単語を詰め込む ----
+  fillRemainingWords(bestResult, eligibleWords, size, deadline);
+
+  // ---- フェーズ3：局所探索（ruin & recreate）で語数をさらに増やす ----
+  const improved = improveByLocalSearch(
+    bestResult,
+    eligibleWords,
+    size,
+    deadline
+  );
+
+  bestResult = improved.best;
+
+  fillGrid(bestResult.grid);
+
+  const placedWords = bestResult.placements
+    .map(p => p.word)
+    .sort((a, b) => a.localeCompare(b));
 
   const placedWordCount = placedWords.length;
 
@@ -1009,6 +1138,10 @@ function generateWordSearch(words, size) {
     totalPlacedChars,
     size,
 
+    totalWordCount: words.length,
+    eligibleWordCount: eligibleCount,
+    unplacedWordCount: eligibleCount - placedWordCount,
+
     usedCellCount: usageStats.usedCellCount,
     totalUsageCount: usageStats.totalUsageCount,
     overlapCellCount: usageStats.overlapCellCount,
@@ -1018,6 +1151,7 @@ function generateWordSearch(words, size) {
     highOverlapCellCount: usageStats.highOverlapCellCount,
 
     attemptsTried,
+    localSearchIterations: improved.iterations,
     generationMs
   };
 }
