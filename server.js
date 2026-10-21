@@ -8,8 +8,14 @@ const {
   workerData
 } = require("worker_threads");
 
+const { solveByAnnealing } = require("./annealer");
+
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
+
+// 生成エンジン："anneal"（焼きなまし・既定）または "legacy"（従来の貪欲法＋局所探索）
+// 環境変数 GENERATION_ENGINE で全体を切り替えられる
+const DEFAULT_ENGINE = process.env.GENERATION_ENGINE === "legacy" ? "legacy" : "anneal";
 
 const WORD_FILES = {
   countries: ["kokumei.txt", "countries.txt"],
@@ -1356,14 +1362,27 @@ function runWorker() {
   try {
     const { words, size, mode } = workerData;
 
-    parentPort.postMessage({ result: generateWordSearch(words, size, mode) });
+    parentPort.postMessage({ result: generate(words, size, mode) });
   } catch (error) {
     parentPort.postMessage({ error: error.message });
   }
 }
 
-if (isMainThread) {
+function generate(words, size, mode, engine = DEFAULT_ENGINE) {
+  if (engine === "legacy") {
+    return { ...generateWordSearch(words, size, mode), engine: "legacy" };
+  }
+
+  return solveByAnnealing(words, size, mode, {
+    timeLimitMs: GENERATION_TIME_LIMIT_MS
+  });
+}
+
+if (!isMainThread) {
+  runWorker();
+} else if (require.main === module) {
   startServer();
 } else {
-  runWorker();
+  // ベンチマークなどから require された場合は、サーバーを起動せず関数だけ公開する
+  module.exports = { generate, generateWordSearch, loadWords, WORD_FILES };
 }

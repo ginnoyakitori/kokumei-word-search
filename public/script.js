@@ -62,7 +62,7 @@ document.addEventListener("DOMContentLoaded", () => {
     count:
       "語数重視：盤面に入る単語の数を最大化します。重複は語数を増やすための手段として使います。",
     overlap:
-      "重複重視：1つのマスを多くの単語が共有するように配置します。語数より重なりの多さを優先します。"
+      "重複重視：「各座標の文字が何個の単語に使われているか」の合計（総使用数）を最大化します。"
   };
 
   function updateModeDescription() {
