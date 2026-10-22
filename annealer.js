@@ -52,7 +52,9 @@ function getAnnealConfig(size, mode, limitMs) {
     t0Ratio: 0.3,
     t1Ratio: 0.03,
     plantProb: 0.4,
-    plantTries: size <= 10 ? 60 : size <= 16 ? 80 : 100
+    plantTries: size <= 10 ? 60 : size <= 16 ? 80 : 100,
+    // 貪欲構築した盤面から低温で焼きなます（ランダム開始より大きい盤面ほど有利）
+    initMode: "greedy"
   };
 }
 
@@ -385,8 +387,13 @@ function createEngine(model, rng) {
   }
 
   // 1回の焼きなまし。最良盤面を bestCells に書き込み、そのスコアを返す
-  function anneal(durationMs, T0, T1, plantProb, plantTries, bestCells) {
-    randomizeCells();
+  function anneal(durationMs, T0, T1, plantProb, plantTries, bestCells, initCells) {
+    if (initCells) {
+      cells.set(initCells);
+    } else {
+      randomizeCells();
+    }
+
     recompute();
 
     let bestScore = score;
@@ -547,6 +554,164 @@ function buildUsageGrid(model, occurrencesByWord, rng) {
 }
 
 // ------------------------------------------------------------
+// 貪欲構築：よく使われる文字の多い単語を中央に置き、空きマスをなるべく
+// 使わず重複の多い単語から順に置いていく。置けなくなったら残りを文字で埋める。
+// 焼きなましの初期盤面として使う。
+// ------------------------------------------------------------
+function buildGreedyStart(model, rng, mode) {
+  const { size, wordLetters, pool, A } = model;
+  const nWords = wordLetters.length;
+  const cellCount = size * size;
+  const cells = new Int16Array(cellCount).fill(-1);
+  const placed = new Uint8Array(nWords);
+
+  const rand01 = () => rng() / 4294967296;
+  const randInt = n => rng() % n;
+
+  if (!model.freq) {
+    model.freq = new Float64Array(A);
+    for (const letters of wordLetters) {
+      for (const l of letters) model.freq[l]++;
+    }
+  }
+
+  const freq = model.freq;
+
+  function range(d, len) {
+    const dx = DX[d];
+    const dy = DY[d];
+
+    return {
+      sxMin: dx === -1 ? len - 1 : 0,
+      sxMax: dx === 1 ? size - len : size - 1,
+      syMin: dy === -1 ? len - 1 : 0,
+      syMax: dy === 1 ? size - len : size - 1
+    };
+  }
+
+  // ---- 中央の1語目：よく使われる文字が多い単語 ----
+  let seedWord = -1;
+  {
+    const scored = [];
+
+    for (let w = 0; w < nWords; w++) {
+      const letters = wordLetters[w];
+      if (letters.length < Math.ceil(size / 2)) continue;
+
+      let sum = 0;
+      for (const l of letters) sum += freq[l];
+
+      scored.push({ w, score: sum * (0.85 + rand01() * 0.3) });
+    }
+
+    scored.sort((x, y) => y.score - x.score);
+
+    if (scored.length > 0) {
+      seedWord = scored[randInt(Math.min(5, scored.length))].w;
+    }
+  }
+
+  if (seedWord >= 0) {
+    const letters = wordLetters[seedWord];
+    const len = letters.length;
+    const d = [0, 2, 4, 6][randInt(4)];
+    const r = range(d, len);
+    const center = Math.floor(size / 2);
+    const off = Math.floor((len - 1) / 2);
+
+    const sx = Math.min(r.sxMax, Math.max(r.sxMin, center - DX[d] * off));
+    const sy = Math.min(r.syMax, Math.max(r.syMin, center - DY[d] * off));
+
+    for (let i = 0; i < len; i++) {
+      cells[(sy + DY[d] * i) * size + sx + DX[d] * i] = letters[i];
+    }
+
+    placed[seedWord] = 1;
+  }
+
+  // ---- 2語目以降：空きマスの消費が少なく、重複の多い置き方を選ぶ ----
+  const sample = Math.min(nWords, size <= 10 ? 220 : 140);
+  let fails = 0;
+
+  while (fails < 3) {
+    let bestScore = -Infinity;
+    let bestW = -1;
+    let bestSx = 0;
+    let bestSy = 0;
+    let bestD = 0;
+
+    for (let t = 0; t < sample; t++) {
+      const w = randInt(nWords);
+      if (placed[w]) continue;
+
+      const letters = wordLetters[w];
+      const len = letters.length;
+
+      for (let d = 0; d < 8; d++) {
+        const dx = DX[d];
+        const dy = DY[d];
+        const r = range(d, len);
+
+        if (r.sxMax < r.sxMin || r.syMax < r.syMin) continue;
+
+        for (let sy = r.syMin; sy <= r.syMax; sy++) {
+          for (let sx = r.sxMin; sx <= r.sxMax; sx++) {
+            let fresh = 0;
+            let ok = true;
+
+            for (let i = 0; i < len; i++) {
+              const cur = cells[(sy + dy * i) * size + sx + dx * i];
+
+              if (cur === -1) fresh++;
+              else if (cur !== letters[i]) {
+                ok = false;
+                break;
+              }
+            }
+
+            if (!ok || fresh === 0) continue;
+
+            // 語数重視：1語あたりの新規マスが少ないほど良い
+            // 重複重視：新規マス1つあたりに得られる文字数が多いほど良い
+            const gain = mode === "overlap" ? len : 1;
+            const score = (gain / (fresh + 0.5)) * (0.9 + rand01() * 0.2);
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestW = w;
+              bestSx = sx;
+              bestSy = sy;
+              bestD = d;
+            }
+          }
+        }
+      }
+    }
+
+    if (bestW < 0) {
+      fails++;
+      continue;
+    }
+
+    fails = 0;
+
+    const letters = wordLetters[bestW];
+
+    for (let i = 0; i < letters.length; i++) {
+      cells[(bestSy + DY[bestD] * i) * size + bestSx + DX[bestD] * i] = letters[i];
+    }
+
+    placed[bestW] = 1;
+  }
+
+  for (let i = 0; i < cellCount; i++) {
+    if (cells[i] === -1) cells[i] = pool[randInt(pool.length)];
+  }
+
+  return cells;
+}
+
+// ------------------------------------------------------------
 // 公開API
 // ------------------------------------------------------------
 function solveByAnnealing(words, size, mode = "count", options = {}) {
@@ -561,6 +726,9 @@ function solveByAnnealing(words, size, mode = "count", options = {}) {
   const plantTries = options.plantTries ?? config.plantTries;
   const t0Ratio = options.t0Ratio ?? config.t0Ratio;
   const t1Ratio = options.t1Ratio ?? config.t1Ratio;
+  const initMode = options.initMode ?? config.initMode ?? "random";
+  const initT0Ratio = options.initT0Ratio ?? 0.1;
+  const initCandidates = options.initCandidates ?? (size <= 10 ? 6 : 3);
 
   const model = createModel(words, size, mode);
   const eligibleCount = model.eligible.length;
@@ -575,18 +743,42 @@ function solveByAnnealing(words, size, mode = "count", options = {}) {
   let totalIterations = 0;
 
   if (eligibleCount > 0) {
-    const T0 = model.meanWeight * t0Ratio;
+    const T0 = model.meanWeight * (initMode === "greedy" ? initT0Ratio : t0Ratio);
     const T1 = model.meanWeight * t1Ratio;
     const perRunMs = Math.max(200, Math.floor(budgetMs / runs));
 
     for (let r = 0; r < runs; r++) {
+      let init = null;
+      let buildMs = 0;
+
+      if (initMode === "greedy") {
+        // 構築に使った時間も、この1回分の持ち時間から差し引く（総時間を揃えるため）
+        const buildStart = Date.now();
+        let initScore = -Infinity;
+
+        for (let k = 0; k < initCandidates; k++) {
+          const cand = buildGreedyStart(model, rng, mode);
+
+          engine.cells.set(cand);
+          engine.recompute();
+
+          if (engine.getScore() > initScore) {
+            initScore = engine.getScore();
+            init = cand;
+          }
+        }
+
+        buildMs = Date.now() - buildStart;
+      }
+
       const { bestScore: s, iterations } = engine.anneal(
-        perRunMs,
+        Math.max(200, perRunMs - buildMs),
         T0,
         T1,
         plantProb,
         plantTries,
-        runBest
+        runBest,
+        init
       );
 
       totalIterations += iterations;
